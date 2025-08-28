@@ -16,7 +16,7 @@ updates:
     schedule:
       interval: "weekly"
   - package-ecosystem: "cargo"
-    directory: "/fks_node_network"
+    directory: "/fks_nodes"
     schedule:
       interval: "weekly"
   - package-ecosystem: "cargo"
