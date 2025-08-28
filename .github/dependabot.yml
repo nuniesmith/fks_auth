@@ -1,0 +1,41 @@
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    allow:
+      - dependency-type: "all"
+    open-pull-requests-limit: 10
+  - package-ecosystem: "pip"
+    directory: "/fks_shared"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "cargo"
+    directory: "/fks_execution"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "cargo"
+    directory: "/fks_node_network"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "cargo"
+    directory: "/fks_config"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "npm"
+    directory: "/fks_ninja"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "npm"
+    directory: "/fks_master"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/fks_master"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

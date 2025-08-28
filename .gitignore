@@ -1,0 +1,311 @@
+# ============================================================================
+# FKS Trading Systems - .gitignore
+# ============================================================================
+
+# ============================================================================
+# OPERATING SYSTEM
+# ============================================================================
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Linux
+*~
+
+# ============================================================================
+# EDITORS & IDES
+# ============================================================================
+# Visual Studio Code
+.vscode/
+
+# JetBrains IDEs
+.idea/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.userprefs
+
+# Eclipse
+.project
+.classpath
+.settings/
+
+# Vim/Emacs
+*.swp
+*.swo
+.*.swp
+
+# Sublime Text
+*.sublime-*
+
+# Spyder
+.spyderproject
+.spyproject
+
+# Rope
+.ropeproject
+
+# ============================================================================
+# LANGUAGES & FRAMEWORKS
+# ============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+# Python build directories (root level only to not block web builds)
+/build/
+develop-eggs/
+/dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Python testing & coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+test-results/
+TestResults/
+
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+.python-version
+__pypackages__/
+
+# Python package managers
+pdm.lock
+.pdm.toml
+.pdm-python
+.pdm-build/
+
+# Python type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Python frameworks
+# Django
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+# Flask
+instance/
+.webassets-cache
+# Scrapy
+.scrapy
+
+# Python documentation
+docs/_build/
+.pybuilder/
+
+# Python other
+*.mo
+*.pot
+celerybeat-schedule
+celerybeat.pid
+cython_debug/
+.kaggle/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# SageMath
+*.sage.py
+
+# Rust
+target/
+src/rust/**/target/
+src/rust/**/.cargo-cache/
+src/rust/**/debug/
+src/rust/**/release/
+src/rust/**/*.o
+src/rust/**/*.a
+src/rust/**/*.so
+src/rust/**/*.d
+src/rust/**/.fingerprint/
+Cargo.lock
+src/rust/**/Cargo.lock
+**/*.rs.bk
+
+# Node.js
+node_modules/
+/.pnp
+.pnp.js
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# React/Web specific
+# Ignore React build outputs (generated artifacts)
+src/web/react/build/
+src/web/react/dist/
+# Keep public assets tracked (no ignore rule for public/)
+
+# Production builds (but not web builds)
+/build/
+/dist/
+
+# Testing
+/coverage/
+
+# .NET/C#
+bin/
+obj/
+*.dll
+*.pdb
+*.dll.config
+mono_crash.*
+
+# Keep reference DLLs
+!references/*.dll
+
+# ============================================================================
+# BUILD & DEPLOYMENT
+# ============================================================================
+# Build outputs
+releases/
+build/output/
+build/temp/
+build/validation/
+temp_build/
+packages/*.zip
+packages/bin/
+
+# Docker
+.docker/
+
+# CI/CD artifacts
+/config-output/
+/workflow-env/
+/workflow-marker/
+
+# ============================================================================
+# LOGS & DEBUGGING
+# ============================================================================
+logs/
+*.log
+trace/
+debug/
+*.trc
+
+# ============================================================================
+# TEMPORARY & BACKUP FILES
+# ============================================================================
+# Backup files
+src_backup/
+*.bak
+*.orig
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Archives (except specific packages)
+*.zip
+*.tar.gz
+*.rar
+
+# Windows Installer files
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# ============================================================================
+# PROJECT SPECIFIC
+# ============================================================================
+secrets/
+.conda/
+
+# Environment files (do not commit real secrets)
+.env
+.env.local
+.env.*.local
+.env.secrets
+.env.*.secrets
+
+# Keep example/template envs tracked
+!.env.example
+!.env.template
+!.env.production.template
+!.env.development
+!.env.staging
+!.env.gpu
+!.env.test
+
+# Data files
+*.csv
+projects/
+outputs/
+
+# Syncthing
+.stfolder/
+
+# ============================================================================
+# KEEP EMPTY DIRECTORIES
+# ============================================================================
+!packages/.gitkeep
+!build/.gitkeep
+!docs/.gitkeep
+
+fks_ssh-keys
+# Local environment marker
+.local
+
+./data/backups/*
+# Analysis artifacts
+file_contents.txt
+codebase_analysis_report_*/
+codebase-analysis-report*/
+perf.json

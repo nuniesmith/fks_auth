@@ -1,0 +1,9 @@
+version: '3.9'
+services:
+  fks_auth:
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./src:/app/src
+

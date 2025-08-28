@@ -1,0 +1,45 @@
+name: Codebase Analysis
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**/*.py'
+      - '**/*.rs'
+      - '**/*.js'
+      - '**/*.ts'
+      - '**/*.tsx'
+      - '**/*.sh'
+      - '**/*.cs'
+      - 'fks_master/scripts/analyze_codebase.sh'
+      - '.github/workflows/codebase-analysis.yml'
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Run analysis
+        run: |
+          bash fks_master/scripts/analyze_codebase.sh --json analysis.json --top 25
+          cat analysis.json
+
+      - name: Upload analysis artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codebase-analysis
+          path: analysis.json
+
+      - name: Summary metrics
+        run: |
+          TODO=$(jq '.todo' analysis.json)
+          FIXME=$(jq '.fixme' analysis.json)
+          DENS=$(jq '.todo_fixme_density_per_1k' analysis.json)
+          echo "TODO=$TODO FIXMEs=$FIXME density_per_1k=$DENS"

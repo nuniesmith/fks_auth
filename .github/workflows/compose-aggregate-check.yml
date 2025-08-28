@@ -1,0 +1,51 @@
+name: Compose Aggregate Integrity
+
+on:
+  pull_request:
+    paths:
+      - '**/docker-compose.yml'
+      - 'fks_master/scripts/merge_compose.sh'
+      - '.github/workflows/compose-aggregate-check.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - '**/docker-compose.yml'
+      - 'fks_master/scripts/merge_compose.sh'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Generate aggregate compose (dry run summary)
+        run: |
+          bash fks_master/scripts/merge_compose.sh --dry-run --summary-json summary.json
+          echo 'Summary:'
+          cat summary.json
+
+      - name: Generate aggregate compose (write)
+        run: |
+          bash fks_master/scripts/merge_compose.sh
+
+      - name: Verify digest
+        run: |
+          sha256sum -c docker-compose.generated.yml.sha256 || {
+            echo 'Digest mismatch. Did you forget to commit updated docker-compose.generated.yml?' >&2
+            exit 1
+          }
+
+      - name: Upload summary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-summary
+          path: summary.json
