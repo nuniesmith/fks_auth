@@ -2,7 +2,7 @@ services:
   fks_auth:
     build:
       context: .
-      dockerfile: shared/shared_docker/templates/python.Dockerfile
+      dockerfile: shared/shared_docker/templates/Dockerfile.python
     working_dir: /app/src
     command: ["uvicorn", "fks_api.fastapi_main:app", "--host", "0.0.0.0", "--port", "4100"]
     environment:
