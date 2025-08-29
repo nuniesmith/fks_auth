@@ -6,19 +6,19 @@ concurrency:
 
 on:
   push:
-    branches: [ main ]
     paths:
       - 'src/**'
       - 'tests/**'
-      - 'Dockerfile'
+      - 'Dockerfile*'
       - 'requirements*.txt'
       - '.github/workflows/fks_auth-ci.yml'
   pull_request:
-    branches: [ main ]
     paths:
       - 'src/**'
       - 'tests/**'
-      - 'Dockerfile'
+      - 'Dockerfile*'
+      - 'requirements*.txt'
+      - '.github/workflows/fks_auth-ci.yml'
       - 'requirements*.txt'
       - '.github/workflows/fks_auth-ci.yml'
   workflow_dispatch: {}
@@ -77,11 +77,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: local/fks
+          images: ${{ env.DOCKER_USERNAME != '' && format('{0}/fks', env.DOCKER_USERNAME) || 'local/fks' }}
           tags: |
-            type=ref,event=branch,prefix=${{ env.SERVICE_SLUG }}-
-            type=sha,prefix=${{ env.SERVICE_SLUG }}-
-            type=raw,value=${{ env.SERVICE_SLUG }}-latest
+            type=ref,event=branch,prefix=auth-
+            type=sha,prefix=auth-
+            type=raw,value=auth-latest
 
       - name: Build image (no push)
         uses: docker/build-push-action@v5

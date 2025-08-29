@@ -1,0 +1,6 @@
+[submodule "shared/shared_docker"]
+	path = shared/shared_docker
+	url = https://github.com/nuniesmith/shared-docker.git
+[submodule "shared/shared_scripts"]
+	path = shared/shared_scripts
+	url = https://github.com/nuniesmith/shared-scripts.git
