@@ -4,3 +4,12 @@
 [submodule "shared/shared_scripts"]
 	path = shared/shared_scripts
 	url = https://github.com/nuniesmith/shared-scripts.git
+[submodule "shared/shared_python"]
+	path = shared/shared_python
+	url = https://github.com/nuniesmith/shared_python
+[submodule "shared/shared_schema"]
+	path = shared/shared_schema
+	url = https://github.com/nuniesmith/shared_schema
+[submodule "shared/shared_actions"]
+	path = shared/shared_actions
+	url = https://github.com/nuniesmith/shared_actions
