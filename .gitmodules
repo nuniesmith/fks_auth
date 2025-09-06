@@ -18,7 +18,7 @@
 	url = https://github.com/nuniesmith/shared_rust.git
 [submodule "shared/shared_nginx"]
 	path = shared/shared_nginx
-	url = https://github.com/nuniesmith/shared_nginx
+	url = https://github.com/nuniesmith/shared_nginx.git
 [submodule "shared/shared_react"]
 	path = shared/shared_react
-	url = https://github.com/nuniesmith/shared_react
+	url = https://github.com/nuniesmith/shared_react.git
