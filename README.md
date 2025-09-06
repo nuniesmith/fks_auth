@@ -1,40 +1,45 @@
-# FKS API Service
+# FKS Auth (Dev Rust Service)
 
-Lightweight FastAPI service providing HTTP/WebSocket endpoints for the FKS platform.
+Lightweight Axum-based auth stub for development. Provides a single hardcoded dev user.
 
-## Features
+## Endpoints
 
-- Health & info endpoints
-- Synthetic chart + indicator data for UI development
-- Optional background Ollama model pull (dev)
-- Modular router loading with graceful degradation
+- `GET /health` -> `ok`
+- `POST /login` {"username":"jordan","password":"567326"} -> token
+- `POST /refresh` {"refresh_token": "..."}
+- `GET /me` (requires Bearer access token)
 
-## Quick Start
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install .[websocket,security]
-uvicorn fks_api.fastapi_main:app --reload --port 8000
-```
-
-Visit: <http://localhost:8000/docs>
-
-## Smoke Test
+## Quick Start (Host)
 
 ```bash
-pytest -q
+cargo run --release
 ```
 
-## Environment Vars
+## Quick Start (Docker)
 
-- API_SERVICE_NAME, API_SERVICE_PORT
-- APP_ENV (development|production)
-- OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_FAST_MODEL
+```bash
+docker build -t fks_auth:dev .
+docker run --rm -p 4100:4100 fks_auth:dev
+```
 
-## Next Steps
+## Response Examples
 
-- Replace synthetic data endpoints with real data service
-- AuthN/Z middleware integration
-- Metrics & tracing
+```bash
+curl -s localhost:4100/health
+LOGIN=$(curl -s -X POST localhost:4100/login -H 'Content-Type: application/json' \
+	-d '{"username":"jordan","password":"567326"}')
+echo "$LOGIN" | jq '.'
+REFRESH=$(echo "$LOGIN" | jq -r '.refresh_token')
+curl -s -X POST localhost:4100/refresh -H 'Content-Type: application/json' -d '{"refresh_token":"'$REFRESH'"}' | jq '.'
+ACCESS=$(echo "$LOGIN" | jq -r '.access_token')
+curl -s -H "Authorization: Bearer $ACCESS" localhost:4100/me | jq '.'
+```
+
+## Environment
+
+Port fixed to 4100 (override by rebuilding image with code change or using docker-compose mapping).
+
+## Notes
+
+- Security intentionally minimal for local integration.
+- Replace with real auth (JWT, sessions, DB) later.

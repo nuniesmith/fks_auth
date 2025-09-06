@@ -2,32 +2,25 @@ services:
   fks_auth:
     build:
       context: .
-      dockerfile: ../shared/shared_docker/templates/Dockerfile.python
-      args:
-        SERVICE_NAME: fks-auth
-        SERVICE_TYPE: api
-        SERVICE_PORT: 4100
-        PYTHON_VERSION: "3.11"
-    working_dir: /app/src
-    command: ["uvicorn", "fks_api.fastapi_main:app", "--host", "0.0.0.0", "--port", "4100"]
+      dockerfile: Dockerfile
     environment:
       TZ: America/Toronto
-      SERVICE_PORT: 4100
-      APP_MODULE: fks_api.fastapi_main:app
+      AUTH_PORT: 4100
+      RUST_LOG: info
     ports:
       - "4100:4100"
-    volumes:
-      - /etc/timezone:/etc/timezone:ro
-      - /etc/localtime:/etc/localtime:ro
-      - ./logs:/app/logs
     networks: [fks_net]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4100/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 10s
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
 
 networks:
   fks_net:
     name: fks_net
+    external: true

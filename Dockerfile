@@ -1,28 +1,31 @@
-# Multi-stage Dockerfile extending shared Python template
+### Dev Rust Auth Service Dockerfile
+## Multi-stage build producing a small runtime image
 
-# Build stage - extends shared Python template
-FROM shared/python:3.13-slim AS build
-COPY . /app/src/
-RUN python -m pip install --no-deps -e .
+FROM rust:1.81-slim AS build
+WORKDIR /app
 
-# Runtime stage - extends shared Python template for production  
-FROM shared/python:3.13-slim AS runtime
+# Create dummy layer to cache dependencies
+COPY Cargo.toml .
+RUN mkdir src && echo 'fn main() {println!("placeholder")}' > src/main.rs && cargo build --release || true
 
-# Copy built application from build stage
-COPY --from=build /app/src/ /app/src/
+# Copy real source
+COPY src ./src
+RUN cargo build --release
 
-# Set service-specific environment variables
+FROM debian:stable-slim AS runtime
+WORKDIR /app
+# Install curl for Docker HEALTHCHECK (previously health checks failed: curl not found)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && useradd -m appuser
+COPY --from=build /app/target/release/fks_auth /usr/local/bin/fks_auth
+
 ENV SERVICE_NAME=fks-auth \
-    SERVICE_TYPE=auth \
-    SERVICE_PORT=8001
+  SERVICE_TYPE=auth
 
-# Health check endpoint
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:${SERVICE_PORT}/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -fsS http://localhost:4100/health || exit 1
 
-EXPOSE ${SERVICE_PORT}
-
+EXPOSE 4100
 USER appuser
-
-# Use FastAPI/uvicorn as default entrypoint for auth service
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["/usr/local/bin/fks_auth"]

@@ -89,12 +89,16 @@ bring_up(){
 health_checks(){
   log INFO "Running health probes (retries=$HEALTH_RETRIES interval=${HEALTH_INTERVAL}s)"
   local attempts=0
-  local ok_api=false ok_db=false ok_redis=false
+  local ok_api=false ok_db=false ok_redis=false ok_auth=false
   while (( attempts < HEALTH_RETRIES )); do
     attempts=$((attempts+1))
-    # API
+    # API (legacy port 8000)
     if ! $ok_api; then
       if curl -s -f http://localhost:8000/health >/dev/null 2>&1; then ok_api=true; log INFO "API healthy"; fi
+    fi
+    # Auth (new Rust service port 4100)
+    if ! $ok_auth; then
+      if curl -s -f http://localhost:4100/health >/dev/null 2>&1; then ok_auth=true; log INFO "Auth healthy"; fi
     fi
     # Postgres container exists? use pg_isready
     if ! $ok_db && docker ps --format '{{.Names}}' | grep -q '^fks_postgres$'; then
@@ -104,17 +108,17 @@ health_checks(){
     if ! $ok_redis && docker ps --format '{{.Names}}' | grep -q '^fks_redis$'; then
       if docker exec fks_redis redis-cli ping 2>/dev/null | grep -q PONG; then ok_redis=true; log INFO "Redis ready"; fi
     fi
-    if $ok_api && $ok_db && $ok_redis; then break; fi
+  if $ok_api && $ok_db && $ok_redis && $ok_auth; then break; fi
     sleep "$HEALTH_INTERVAL"
   done
-  ($ok_api && $ok_db && $ok_redis) || log WARN "Some services not healthy after retries (api=$ok_api db=$ok_db redis=$ok_redis)"
+  ($ok_api && $ok_db && $ok_redis && $ok_auth) || log WARN "Some services not healthy after retries (api=$ok_api auth=$ok_auth db=$ok_db redis=$ok_redis)"
 }
 
 summary(){
   log INFO "Compose ps:"; $COMPOSE_CMD "${FILE_ARGS[@]}" ps || true
   log INFO "Key endpoints:"
   echo "  API:   http://localhost:8000"
-  echo "  Auth:  http://localhost:9000 (if enabled)"
+  echo "  Auth:  http://localhost:4100"
 }
 
 follow_logs(){
