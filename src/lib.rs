@@ -35,6 +35,7 @@ pub async fn run() -> anyhow::Result<()> {
         .route("/login", post(login))
         .route("/refresh", post(refresh))
         .route("/me", get(me))
+        .route("/verify", get(verify))
         .with_state(state)
         .layer(cors);
     let addr = SocketAddr::from(([0,0,0,0], port));
@@ -84,6 +85,16 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<De
     let data = decode::<Claims>(token, &state.jwt.dec, &Validation::new(state.jwt.algorithm)).map_err(|_| (StatusCode::UNAUTHORIZED, "invalid token".into()))?;
     if data.claims.typ != "access" { return Err((StatusCode::UNAUTHORIZED, "wrong token type".into())); }
     Ok(Json((*state.dev_user).clone()))
+}
+
+// Lightweight verification endpoint for Nginx auth_request.
+// Returns 200 on valid access token, 401 otherwise (empty body).
+async fn verify(State(state): State<AppState>, headers: HeaderMap) -> StatusCode {
+    let auth = match headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) { Some(v) => v, None => return StatusCode::UNAUTHORIZED };
+    let token = match auth.strip_prefix("Bearer ") { Some(t) => t, None => return StatusCode::UNAUTHORIZED };
+    let Ok(data) = decode::<Claims>(token, &state.jwt.dec, &Validation::new(state.jwt.algorithm)) else { return StatusCode::UNAUTHORIZED };
+    if data.claims.typ != "access" { return StatusCode::UNAUTHORIZED; }
+    StatusCode::OK
 }
 
 fn internal<E: std::fmt::Display>(e: E) -> (StatusCode, String) { (StatusCode::INTERNAL_SERVER_ERROR, format!("internal error: {e}")) }
