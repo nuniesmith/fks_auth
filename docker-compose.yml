@@ -2,7 +2,7 @@ services:
   fks_auth:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: shared/docker/templates/Dockerfile.rust
     environment:
       TZ: America/Toronto
       AUTH_PORT: 4100
