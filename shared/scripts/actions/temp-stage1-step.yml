@@ -1,0 +1,51 @@
+      - name: 🏗️ Stage 1 - Pre-Reboot Setup
+        id: stage1-setup
+        run: |
+          echo "🏗️ Stage 1: Pre-reboot foundation setup..."
+          
+          # Check if service has its own stage1 script
+          if [ -f "scripts/stage1-setup.sh" ]; then
+            echo "✅ Using service-specific stage1 script: scripts/stage1-setup.sh"
+            cp scripts/stage1-setup.sh stage1-setup.sh
+            
+            # Inject environment variables into the script
+            sed -i 's/\$ACTIONS_USER_PASSWORD/${{ secrets.ACTIONS_USER_PASSWORD }}/g' stage1-setup.sh
+            sed -i 's/\$TAILSCALE_AUTH_KEY/${{ secrets.TAILSCALE_AUTH_KEY }}/g' stage1-setup.sh
+          else
+            echo "ℹ️ No service-specific stage1 script found, using shared scripts"
+            
+            # Create simplified stage1 script that downloads external scripts
+            cat > stage1-setup.sh << 'EOF'
+#!/bin/bash
+set -euo pipefail
+
+# Download and run setup scripts
+curl -o stage1-core-setup.sh https://raw.githubusercontent.com/nuniesmith/actions/main/scripts/stage1-core-setup.sh
+curl -o stage1-docker-setup.sh https://raw.githubusercontent.com/nuniesmith/actions/main/scripts/stage1-docker-setup.sh
+curl -o stage1-final-setup.sh https://raw.githubusercontent.com/nuniesmith/actions/main/scripts/stage1-final-setup.sh
+
+chmod +x stage1-*.sh
+
+echo "🏗️ Running Stage 1 Core Setup..."
+./stage1-core-setup.sh
+
+echo "🐳 Running Stage 1 Docker Setup..."
+./stage1-docker-setup.sh
+
+echo "⚙️ Running Stage 1 Final Setup..."
+# Replace placeholders in final setup
+sed -i 's/SERVICE_NAME_PLACEHOLDER/${{ env.SERVICE_NAME }}/g' stage1-final-setup.sh
+sed -i 's/TAILSCALE_AUTH_KEY_PLACEHOLDER/${{ secrets.TAILSCALE_AUTH_KEY }}/g' stage1-final-setup.sh
+sed -i 's/\$ACTIONS_USER_PASSWORD/${{ secrets.ACTIONS_USER_PASSWORD }}/g' stage1-final-setup.sh
+./stage1-final-setup.sh
+
+echo "✅ Stage 1 complete - system ready for reboot"
+echo "NEEDS_REBOOT" > /tmp/stage1_status
+EOF
+          fi
+          
+          scp -i ~/.ssh/linode_deployment_key -o StrictHostKeyChecking=no stage1-setup.sh root@${{ steps.create-server.outputs.server_ip }}:/tmp/
+          ssh -i ~/.ssh/linode_deployment_key -o StrictHostKeyChecking=no root@${{ steps.create-server.outputs.server_ip }} "chmod +x /tmp/stage1-setup.sh && /tmp/stage1-setup.sh"
+          
+          STAGE1_STATUS=$(ssh -i ~/.ssh/linode_deployment_key -o StrictHostKeyChecking=no root@${{ steps.create-server.outputs.server_ip }} "cat /tmp/stage1_status" || echo "unknown")
+          echo "stage1_status=$STAGE1_STATUS" >> $GITHUB_OUTPUT

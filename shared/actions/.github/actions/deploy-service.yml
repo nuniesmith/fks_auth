@@ -1,0 +1,620 @@
+name: 🚀 Universal Service Deployment
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: 'Name of the service to deploy (e.g., fks, nginx, ats)'
+        required: true
+        type: string
+      
+      deployment_mode:
+        description: 'Deployment mode'
+        required: false
+        type: string
+        default: 'full-deploy'
+        # Options: full-deploy, update-only, restart-only, health-check
+      
+      create_new_server:
+        description: 'Create new Linode server'
+        required: false
+        type: boolean
+        default: true
+      
+      server_type:
+        description: 'Linode server type'
+        required: false
+        type: string
+        default: 'g6-standard-2'
+        # Options: g6-nanode-1, g6-standard-1, g6-standard-2, g6-standard-4, g6-standard-8
+      
+      target_region:
+        description: 'Linode region'
+        required: false
+        type: string
+        default: 'ca-central'
+        # Options: us-east, us-central, us-west, ca-central, eu-west
+      
+      domain_suffix:
+        description: 'Domain suffix (e.g., 7gram.xyz)'
+        required: false
+        type: string
+        default: '7gram.xyz'
+      
+      enable_monitoring:
+        description: 'Enable Netdata monitoring'
+        required: false
+        type: boolean
+        default: true
+      
+      enable_backups:
+        description: 'Enable Linode backups'
+        required: false
+        type: boolean
+        default: true
+
+    secrets:
+      # Core Infrastructure
+      LINODE_CLI_TOKEN:
+        required: true
+      SERVICE_ROOT_PASSWORD:
+        required: true
+      
+      # User Management
+      JORDAN_PASSWORD:
+        required: true
+      ACTIONS_USER_PASSWORD:
+        required: true
+      
+      # VPN & Networking
+      TAILSCALE_AUTH_KEY:
+        required: true
+      
+      # Monitoring (Optional)
+      NETDATA_CLAIM_TOKEN:
+        required: false
+      NETDATA_CLAIM_ROOM:
+        required: false
+      
+      # DNS Management (Optional)
+      CLOUDFLARE_API_TOKEN:
+        required: false
+      CLOUDFLARE_ZONE_ID:
+        required: false
+      
+      # Container Registry (Optional)
+      DOCKER_USERNAME:
+        required: false
+      DOCKER_TOKEN:
+        required: false
+      
+      # Notifications (Optional)
+      DISCORD_WEBHOOK:
+        required: false
+
+  workflow_dispatch:
+    inputs:
+      service_name:
+        description: 'Name of the service to deploy'
+        required: true
+        type: choice
+        options:
+          - 'fks'
+          - 'nginx'
+          - 'ats'
+          - 'custom'
+      
+      deployment_mode:
+        description: 'Deployment mode'
+        required: true
+        type: choice
+        options:
+          - 'full-deploy'
+          - 'update-only'
+          - 'restart-only'
+          - 'health-check'
+          - 'destroy'
+        default: 'full-deploy'
+      
+      create_new_server:
+        description: 'Create new Linode server'
+        required: false
+        type: boolean
+        default: true
+      
+      server_type:
+        description: 'Linode server type'
+        required: false
+        type: choice
+        options:
+          - 'g6-nanode-1'          # 1GB RAM
+          - 'g6-standard-1'        # 2GB RAM
+          - 'g6-standard-2'        # 4GB RAM
+          - 'g6-standard-4'        # 8GB RAM
+          - 'g6-standard-8'        # 16GB RAM
+        default: 'g6-standard-2'
+      
+      target_region:
+        description: 'Linode region'
+        required: false
+        type: choice
+        options:
+          - 'us-east'
+          - 'us-central'
+          - 'us-west'
+          - 'ca-central'
+          - 'eu-west'
+        default: 'ca-central'
+
+env:
+  SERVICE_NAME: ${{ inputs.service_name }}
+  DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
+  CREATE_NEW_SERVER: ${{ inputs.create_new_server }}
+  SERVER_TYPE: ${{ inputs.server_type }}
+  TARGET_REGION: ${{ inputs.target_region }}
+  DOMAIN_SUFFIX: ${{ inputs.domain_suffix || '7gram.xyz' }}
+  FULL_DOMAIN: ${{ inputs.service_name }}.${{ inputs.domain_suffix || '7gram.xyz' }}
+
+jobs:
+  # ============================================================================
+  # Pre-flight Checks & Validation
+  # ============================================================================
+  preflight-checks:
+    name: 🛫 Pre-flight Checks
+    runs-on: ubuntu-latest
+    outputs:
+      secrets_validated: ${{ steps.validate-secrets.outputs.validated }}
+      service_config_valid: ${{ steps.validate-service.outputs.valid }}
+      should_create_server: ${{ steps.deployment-decision.outputs.create_server }}
+      should_deploy_service: ${{ steps.deployment-decision.outputs.deploy_service }}
+    
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔐 Validate Required Secrets
+        id: validate-secrets
+        env:
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
+          SERVICE_ROOT_PASSWORD: ${{ secrets.SERVICE_ROOT_PASSWORD }}
+          JORDAN_PASSWORD: ${{ secrets.JORDAN_PASSWORD }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          echo "🔐 Validating required secrets..."
+          
+          MISSING_SECRETS=()
+          
+          [[ -z "$LINODE_CLI_TOKEN" ]] && MISSING_SECRETS+=("LINODE_CLI_TOKEN")
+          [[ -z "$SERVICE_ROOT_PASSWORD" ]] && MISSING_SECRETS+=("SERVICE_ROOT_PASSWORD")
+          [[ -z "$JORDAN_PASSWORD" ]] && MISSING_SECRETS+=("JORDAN_PASSWORD")
+          [[ -z "$ACTIONS_USER_PASSWORD" ]] && MISSING_SECRETS+=("ACTIONS_USER_PASSWORD")
+          [[ -z "$TAILSCALE_AUTH_KEY" ]] && MISSING_SECRETS+=("TAILSCALE_AUTH_KEY")
+          
+          if [[ ${#MISSING_SECRETS[@]} -gt 0 ]]; then
+            echo "❌ Missing required secrets:"
+            printf '  - %s\n' "${MISSING_SECRETS[@]}"
+            echo "Please configure these secrets in your repository settings."
+            exit 1
+          fi
+          
+          echo "✅ All required secrets are configured"
+          echo "validated=true" >> $GITHUB_OUTPUT
+
+      - name: 🧪 Validate Service Configuration
+        id: validate-service
+        run: |
+          echo "🧪 Validating service configuration for: ${{ env.SERVICE_NAME }}"
+          
+          # Check if service configuration exists
+          CONFIG_FILE="services/${{ env.SERVICE_NAME }}/config.yml"
+          if [[ -f "$CONFIG_FILE" ]]; then
+            echo "✅ Service configuration found: $CONFIG_FILE"
+            echo "valid=true" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ No specific configuration found for ${{ env.SERVICE_NAME }}"
+            echo "Will use default configuration"
+            echo "valid=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 🎯 Deployment Decision
+        id: deployment-decision
+        run: |
+          echo "🎯 Making deployment decisions..."
+          echo "Service: ${{ env.SERVICE_NAME }}"
+          echo "Mode: ${{ env.DEPLOYMENT_MODE }}"
+          echo "Create Server: ${{ env.CREATE_NEW_SERVER }}"
+          
+          # Determine if we should create a server
+          if [[ "${{ env.DEPLOYMENT_MODE }}" == "full-deploy" && "${{ env.CREATE_NEW_SERVER }}" == "true" ]]; then
+            echo "create_server=true" >> $GITHUB_OUTPUT
+            echo "✅ Will create new server"
+          else
+            echo "create_server=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ Will use existing server"
+          fi
+          
+          # Determine if we should deploy the service
+          if [[ "${{ env.DEPLOYMENT_MODE }}" != "health-check" ]]; then
+            echo "deploy_service=true" >> $GITHUB_OUTPUT
+            echo "✅ Will deploy/update service"
+          else
+            echo "deploy_service=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ Health check only - no deployment"
+          fi
+
+  # ============================================================================
+  # Server Infrastructure Setup
+  # ============================================================================
+  setup-infrastructure:
+    name: 🏗️ Setup Infrastructure
+    runs-on: ubuntu-latest
+    needs: preflight-checks
+    if: needs.preflight-checks.outputs.should_create_server == 'true'
+    outputs:
+      server_ip: ${{ steps.create-server.outputs.server_ip }}
+      server_id: ${{ steps.create-server.outputs.server_id }}
+      tailscale_ip: ${{ steps.setup-server.outputs.tailscale_ip }}
+    
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Linode CLI
+        run: |
+          echo "🔧 Installing Linode CLI..."
+          pip install linode-cli
+          
+          # Configure Linode CLI
+          mkdir -p ~/.config/linode-cli
+          cat > ~/.config/linode-cli/config << EOF
+          [DEFAULT]
+          default-user = DEFAULT
+          region = ${{ env.TARGET_REGION }}
+          type = ${{ env.SERVER_TYPE }}
+          image = linode/arch
+          
+          [DEFAULT]
+          token = ${{ secrets.LINODE_CLI_TOKEN }}
+          EOF
+          
+          chmod 600 ~/.config/linode-cli/config
+          
+          echo "✅ Linode CLI configured"
+
+      - name: 🚀 Create Linode Server
+        id: create-server
+        run: |
+          echo "🚀 Creating Linode server..."
+          
+          SERVER_LABEL="${{ env.SERVICE_NAME }}-$(date +%Y%m%d-%H%M)"
+          
+          # Check if server already exists
+          if linode-cli linodes list --text --no-headers | grep -q "${{ env.SERVICE_NAME }}"; then
+            echo "⚠️ Server with name containing '${{ env.SERVICE_NAME }}' already exists"
+            EXISTING_IP=$(linode-cli linodes list --text --no-headers | grep "${{ env.SERVICE_NAME }}" | head -1 | cut -f5)
+            EXISTING_ID=$(linode-cli linodes list --text --no-headers | grep "${{ env.SERVICE_NAME }}" | head -1 | cut -f1)
+            echo "Using existing server: $EXISTING_IP (ID: $EXISTING_ID)"
+            echo "server_ip=$EXISTING_IP" >> $GITHUB_OUTPUT
+            echo "server_id=$EXISTING_ID" >> $GITHUB_OUTPUT
+          else
+            echo "Creating new server: $SERVER_LABEL"
+            
+            # Create the server
+            RESULT=$(linode-cli linodes create \
+              --type "${{ env.SERVER_TYPE }}" \
+              --region "${{ env.TARGET_REGION }}" \
+              --image "linode/arch" \
+              --label "$SERVER_LABEL" \
+              --root_pass "${{ secrets.SERVICE_ROOT_PASSWORD }}" \
+              --backups_enabled=${{ inputs.enable_backups || 'true' }} \
+              --text --no-headers)
+            
+            SERVER_ID=$(echo "$RESULT" | cut -f1)
+            echo "Server created with ID: $SERVER_ID"
+            
+            # Wait for server to be running
+            echo "Waiting for server to be running..."
+            while true; do
+              STATUS=$(linode-cli linodes view "$SERVER_ID" --text --no-headers | cut -f2)
+              if [[ "$STATUS" == "running" ]]; then
+                break
+              fi
+              echo "Server status: $STATUS - waiting..."
+              sleep 10
+            done
+            
+            # Get server IP
+            SERVER_IP=$(linode-cli linodes view "$SERVER_ID" --text --no-headers | cut -f5)
+            echo "Server is running at: $SERVER_IP"
+            
+            echo "server_ip=$SERVER_IP" >> $GITHUB_OUTPUT
+            echo "server_id=$SERVER_ID" >> $GITHUB_OUTPUT
+          fi
+
+      - name: ⏳ Wait for SSH Access
+        run: |
+          echo "⏳ Waiting for SSH access to ${{ steps.create-server.outputs.server_ip }}..."
+          
+          for i in {1..30}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+               root@${{ steps.create-server.outputs.server_ip }} "echo 'SSH ready'" 2>/dev/null; then
+              echo "✅ SSH access confirmed"
+              break
+            fi
+            echo "Attempt $i/30 - SSH not ready yet..."
+            sleep 20
+          done
+
+      - name: 🏗️ Setup Server Foundation
+        id: setup-server
+        run: |
+          echo "🏗️ Setting up server foundation..."
+          
+          # Create and run the foundation setup script
+          cat > foundation-setup.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          echo "🔄 Updating system packages..."
+          pacman -Syu --noconfirm
+          
+          echo "📦 Installing essential packages..."
+          pacman -S --noconfirm curl wget git docker docker-compose \
+            tailscale netdata ufw fail2ban sudo base-devel
+          
+          echo "👥 Creating user accounts..."
+          
+          # Create jordan user
+          useradd -m -s /bin/bash jordan || true
+          echo "jordan:${{ secrets.JORDAN_PASSWORD }}" | chpasswd
+          usermod -aG wheel,docker jordan
+          
+          # Create actions_user
+          useradd -m -s /bin/bash actions_user || true
+          echo "actions_user:${{ secrets.ACTIONS_USER_PASSWORD }}" | chpasswd
+          usermod -aG wheel,docker actions_user
+          
+          # Create service-specific user
+          useradd -m -s /bin/bash ${{ env.SERVICE_NAME }}_user || true
+          usermod -aG docker ${{ env.SERVICE_NAME }}_user
+          
+          echo "🔑 Setting up SSH keys..."
+          
+          # Setup SSH for actions_user
+          mkdir -p /home/actions_user/.ssh
+          ssh-keygen -t ed25519 -f /home/actions_user/.ssh/id_ed25519 -N "" -C "actions_user@${{ env.SERVICE_NAME }}"
+          cp /home/actions_user/.ssh/id_ed25519.pub /home/actions_user/.ssh/authorized_keys
+          chown -R actions_user:actions_user /home/actions_user/.ssh
+          chmod 700 /home/actions_user/.ssh
+          chmod 600 /home/actions_user/.ssh/id_ed25519
+          chmod 644 /home/actions_user/.ssh/id_ed25519.pub
+          chmod 600 /home/actions_user/.ssh/authorized_keys
+          
+          echo "🐳 Starting Docker..."
+          systemctl enable docker
+          systemctl start docker
+          
+          echo "🔥 Configuring firewall..."
+          ufw --force reset
+          ufw default deny incoming
+          ufw default allow outgoing
+          ufw allow ssh
+          ufw allow in on tailscale0
+          ufw --force enable
+          
+          echo "🔗 Setting up Tailscale..."
+          systemctl enable tailscaled
+          systemctl start tailscaled
+          
+          # Connect to Tailscale
+          tailscale up --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" --accept-routes --timeout=60s
+          
+          # Get Tailscale IP
+          sleep 10
+          TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "pending")
+          echo "Tailscale IP: $TAILSCALE_IP"
+          echo "$TAILSCALE_IP" > /tmp/tailscale_ip
+          
+          echo "✅ Foundation setup complete"
+          EOF
+          
+          # Run the setup script
+          scp foundation-setup.sh root@${{ steps.create-server.outputs.server_ip }}:/tmp/
+          ssh root@${{ steps.create-server.outputs.server_ip }} "chmod +x /tmp/foundation-setup.sh && /tmp/foundation-setup.sh"
+          
+          # Get Tailscale IP
+          TAILSCALE_IP=$(ssh root@${{ steps.create-server.outputs.server_ip }} "cat /tmp/tailscale_ip" || echo "unknown")
+          echo "tailscale_ip=$TAILSCALE_IP" >> $GITHUB_OUTPUT
+          echo "✅ Server foundation setup complete"
+
+  # ============================================================================
+  # Service Deployment
+  # ============================================================================
+  deploy-service:
+    name: 🚢 Deploy Service
+    runs-on: ubuntu-latest
+    needs: [preflight-checks, setup-infrastructure]
+    if: needs.preflight-checks.outputs.should_deploy_service == 'true'
+    
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔗 Setup Tailscale for Deployment
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: 🚢 Deploy Service
+        run: |
+          echo "🚢 Deploying ${{ env.SERVICE_NAME }} service..."
+          
+          SERVER_IP="${{ needs.setup-infrastructure.outputs.server_ip }}"
+          TAILSCALE_IP="${{ needs.setup-infrastructure.outputs.tailscale_ip }}"
+          
+          echo "Server IP: $SERVER_IP"
+          echo "Tailscale IP: $TAILSCALE_IP"
+          
+          # Create deployment script based on service type
+          if [[ -f "services/${{ env.SERVICE_NAME }}/deploy.sh" ]]; then
+            echo "Using custom deployment script for ${{ env.SERVICE_NAME }}"
+            cp "services/${{ env.SERVICE_NAME }}/deploy.sh" deploy-custom.sh
+          else
+            echo "Using generic deployment script"
+            cat > deploy-custom.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          echo "🚢 Generic service deployment for ${{ env.SERVICE_NAME }}"
+          
+          # Clone or update service repository
+          if [[ -d "/home/${{ env.SERVICE_NAME }}_user/${{ env.SERVICE_NAME }}" ]]; then
+            echo "Updating existing repository..."
+            cd "/home/${{ env.SERVICE_NAME }}_user/${{ env.SERVICE_NAME }}"
+            git pull origin main
+          else
+            echo "Cloning repository..."
+            git clone "https://github.com/${{ github.repository_owner }}/${{ env.SERVICE_NAME }}.git" \
+              "/home/${{ env.SERVICE_NAME }}_user/${{ env.SERVICE_NAME }}"
+            chown -R ${{ env.SERVICE_NAME }}_user:${{ env.SERVICE_NAME }}_user \
+              "/home/${{ env.SERVICE_NAME }}_user/${{ env.SERVICE_NAME }}"
+          fi
+          
+          # Set up environment and start services
+          cd "/home/${{ env.SERVICE_NAME }}_user/${{ env.SERVICE_NAME }}"
+          
+          if [[ -f "docker-compose.yml" ]]; then
+            echo "Starting Docker services..."
+            sudo -u ${{ env.SERVICE_NAME }}_user docker-compose up -d
+          elif [[ -f "start.sh" ]]; then
+            echo "Running start script..."
+            sudo -u ${{ env.SERVICE_NAME }}_user ./start.sh
+          else
+            echo "No deployment method found (docker-compose.yml or start.sh)"
+          fi
+          
+          echo "✅ Service deployment complete"
+          EOF
+          fi
+          
+          # Run deployment on server
+          scp deploy-custom.sh root@$SERVER_IP:/tmp/
+          ssh root@$SERVER_IP "chmod +x /tmp/deploy-custom.sh && /tmp/deploy-custom.sh"
+
+      - name: 🔍 Setup Monitoring
+        if: inputs.enable_monitoring
+        run: |
+          echo "🔍 Setting up Netdata monitoring..."
+          
+          SERVER_IP="${{ needs.setup-infrastructure.outputs.server_ip }}"
+          
+          cat > setup-monitoring.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          echo "🔍 Configuring Netdata..."
+          
+          # Start Netdata
+          systemctl enable netdata
+          systemctl start netdata
+          
+          # Configure Netdata for external access via Tailscale
+          sed -i 's/bind socket to IP = 127.0.0.1/bind socket to IP = 0.0.0.0/' /etc/netdata/netdata.conf || true
+          
+          # Allow Netdata port through firewall for Tailscale
+          ufw allow in on tailscale0 to any port 19999
+          
+          # Restart Netdata
+          systemctl restart netdata
+          
+          # Claim to Netdata Cloud if tokens provided
+          if [[ -n "${{ secrets.NETDATA_CLAIM_TOKEN }}" ]]; then
+            echo "Claiming Netdata to cloud..."
+            netdata-claim.sh -token="${{ secrets.NETDATA_CLAIM_TOKEN }}" \
+              -rooms="${{ secrets.NETDATA_CLAIM_ROOM }}" \
+              -url=https://app.netdata.cloud || echo "Claim failed, continuing..."
+          fi
+          
+          echo "✅ Monitoring setup complete"
+          EOF
+          
+          scp setup-monitoring.sh root@$SERVER_IP:/tmp/
+          ssh root@$SERVER_IP "chmod +x /tmp/setup-monitoring.sh && /tmp/setup-monitoring.sh"
+
+  # ============================================================================
+  # Health Checks & Validation
+  # ============================================================================
+  health-check:
+    name: 🏥 Health Check
+    runs-on: ubuntu-latest
+    needs: [preflight-checks, setup-infrastructure, deploy-service]
+    if: always() && (needs.deploy-service.result == 'success' || inputs.deployment_mode == 'health-check')
+    
+    steps:
+      - name: 🏥 Perform Health Checks
+        run: |
+          echo "🏥 Performing health checks for ${{ env.SERVICE_NAME }}..."
+          
+          SERVER_IP="${{ needs.setup-infrastructure.outputs.server_ip }}"
+          TAILSCALE_IP="${{ needs.setup-infrastructure.outputs.tailscale_ip }}"
+          
+          # Basic connectivity check
+          echo "Testing SSH connectivity..."
+          ssh -o ConnectTimeout=10 root@$SERVER_IP "echo 'SSH OK'"
+          
+          # Check Docker status
+          echo "Checking Docker status..."
+          ssh root@$SERVER_IP "systemctl is-active docker"
+          
+          # Check Tailscale status
+          echo "Checking Tailscale status..."
+          ssh root@$SERVER_IP "tailscale status"
+          
+          # Check if service is running
+          echo "Checking service status..."
+          ssh root@$SERVER_IP "docker ps" || echo "No Docker containers running"
+          
+          echo "✅ Health checks complete"
+
+  # ============================================================================
+  # Notifications & Cleanup
+  # ============================================================================
+  notify:
+    name: 📢 Send Notifications
+    runs-on: ubuntu-latest
+    needs: [preflight-checks, setup-infrastructure, deploy-service, health-check]
+    if: always()
+    
+    steps:
+      - name: 📢 Discord Notification
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        if: env.DISCORD_WEBHOOK != ''
+        run: |
+          echo "📢 Sending Discord notification..."
+          
+          # Determine deployment status
+          if [[ "${{ needs.deploy-service.result }}" == "success" ]]; then
+            STATUS="✅ SUCCESS"
+            COLOR="3066993"
+          else
+            STATUS="❌ FAILED"
+            COLOR="15158332"
+          fi
+          
+          # Send Discord webhook
+          curl -H "Content-Type: application/json" \
+            -d "{
+              \"embeds\": [{
+                \"title\": \"$STATUS: ${{ env.SERVICE_NAME }} Deployment\",
+                \"description\": \"Service: ${{ env.SERVICE_NAME }}\\nMode: ${{ env.DEPLOYMENT_MODE }}\\nRegion: ${{ env.TARGET_REGION }}\\nDomain: ${{ env.FULL_DOMAIN }}\",
+                \"color\": $COLOR,
+                \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\"
+              }]
+            }" \
+            "${{ secrets.DISCORD_WEBHOOK }}"
+          
+          echo "✅ Notification sent"

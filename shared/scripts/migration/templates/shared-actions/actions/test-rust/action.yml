@@ -1,0 +1,7 @@
+name: test-rust
+description: Run cargo tests
+runs:
+  using: composite
+  steps:
+    - run: cargo test --all --quiet
+      shell: bash

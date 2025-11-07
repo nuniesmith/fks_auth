@@ -1,0 +1,27 @@
+[package]
+name = "fks_auth"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.8.4", features=["macros"] }
+tokio = { version = "1.47.1", features=["rt-multi-thread","macros"] }
+serde = { version = "1.0.219", features=["derive"] }
+serde_json = "1.0.143"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features=["fmt","env-filter"] }
+thiserror = "2.0.16"
+anyhow = "1.0.99"
+lettre = { version = "0.11.18", optional = true, default-features = false, features=["smtp-transport","builder","hostname","pool"] }
+jsonwebtoken = "9.3.1"
+chrono = { version = "0.4.41", features=["clock"] }
+tower-http = { version = "0.6.6", features=["cors"] }
+uuid = { version = "1.10.0", features=["v4"] }
+urlencoding = "2.1"
+
+[features]
+default = ["server"]
+server = []
+
+[dev-dependencies]
+reqwest = { version = "0.12.23", features=["json","rustls-tls"] }

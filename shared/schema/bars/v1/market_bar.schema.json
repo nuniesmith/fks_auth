@@ -1,0 +1,17 @@
+{
+  "$id": "https://fks.shared.schemas/bars/v1/market_bar.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Market Bar (v1)",
+  "type": "object",
+  "required": ["ts", "open", "high", "low", "close", "volume"],
+  "additionalProperties": true,
+  "properties": {
+    "ts": { "type": "integer", "description": "Unix timestamp (seconds)" },
+    "open": { "type": "number" },
+    "high": { "type": "number" },
+    "low": { "type": "number" },
+    "close": { "type": "number" },
+    "volume": { "type": "number" },
+    "provider": { "type": ["string", "null"], "description": "Data source/provider" }
+  }
+}

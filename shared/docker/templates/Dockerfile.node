@@ -1,0 +1,73 @@
+# Improved Dockerfile for FKS Trading Systems - Node.js/React
+
+ARG NODE_VERSION=22
+ARG SERVICE_PORT=80
+ARG APP_ENV=production
+
+# Build stage
+FROM node:${NODE_VERSION}-alpine AS build
+
+# Install build dependencies
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    git
+
+WORKDIR /app
+
+# Prepare base Node.js environment for services
+# Services should extend this template and add their own:
+# - COPY package*.json ./
+# - RUN npm ci --only=production
+# - COPY . . 
+# - RUN npm run build
+
+# Create basic structure for template completeness
+RUN echo '{"name":"fks-node-base","version":"1.0.0","scripts":{"build":"echo Building FKS Node.js base template"},"dependencies":{"express":"^4.18.0"}}' > package.json \
+    && echo 'const express = require("express"); const app = express(); app.get("/", (req, res) => res.send("FKS Node.js base template ready")); app.listen(3000, () => console.log("Server running on port 3000"));' > index.js
+
+# Install basic dependencies for template
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --no-audit --no-fund
+
+# Create build directory with basic content
+RUN mkdir -p dist \
+    && echo '<!DOCTYPE html><html><head><title>FKS Node.js Base</title></head><body><h1>FKS Node.js Base Template Ready</h1></body></html>' > dist/index.html
+
+# Production stage - using nginx for serving
+FROM nginx:1.27.1-alpine AS final
+
+# Create basic nginx configuration for template
+RUN echo 'user nginx; worker_processes auto; error_log /var/log/nginx/error.log warn; pid /var/run/nginx.pid; events { worker_connections 1024; } http { include /etc/nginx/mime.types; default_type application/octet-stream; sendfile on; keepalive_timeout 65; server { listen 80; location / { root /usr/share/nginx/html; index index.html; try_files $uri $uri/ /index.html; } } }' > /etc/nginx/nginx.conf
+
+# Copy built application
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# Services should extend and add their own:
+# COPY nginx.conf /etc/nginx/nginx.conf (if custom config needed)
+# COPY docker-entrypoint.sh /docker-entrypoint.sh (if custom entrypoint needed)
+
+# Create non-root user
+ARG USER_ID=1088
+RUN addgroup -g ${USER_ID} appuser \
+    && adduser -D -u ${USER_ID} -G appuser appuser \
+    && chown -R appuser:appuser /usr/share/nginx/html /var/cache/nginx /var/log/nginx /etc/nginx
+
+# Create directories for nginx to write
+RUN mkdir -p /var/cache/nginx/client_temp \
+    /var/cache/nginx/proxy_temp \
+    /var/cache/nginx/fastcgi_temp \
+    /var/cache/nginx/uwsgi_temp \
+    /var/cache/nginx/scgi_temp \
+    && chown -R appuser:appuser /var/cache/nginx
+
+USER appuser
+
+EXPOSE 80
+
+# Default for template - services should override if they have custom entrypoint
+CMD ["nginx", "-g", "daemon off;"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:80/ || exit 1

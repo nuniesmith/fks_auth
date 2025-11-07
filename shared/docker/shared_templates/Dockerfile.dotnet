@@ -1,0 +1,104 @@
+# Docker Template - Enhanced .NET Service
+# Template for FKS .NET microservices with standardized configuration
+
+# Build stage
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+
+# Build arguments for customization
+ARG SERVICE_NAME=fks-service
+ARG SERVICE_TYPE=ninja
+ARG SERVICE_PORT=8080
+ARG PROJECT_NAME=FKSService
+ARG CONFIGURATION=Release
+
+# Environment variables for build stage
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
+    DOTNET_GENERATE_ASPNET_CERTIFICATE=false \
+    NUGET_XMLDOC_MODE=skip
+
+WORKDIR /src
+
+# Copy solution and project files for dependency caching
+COPY *.sln global.json* nuget.config* ./
+COPY src/*/*.csproj ./src/
+RUN find . -name "*.csproj" -exec dirname {} \; | xargs -I {} mkdir -p {}
+
+# Restore NuGet packages
+RUN --mount=type=cache,target=/root/.nuget/packages \
+    dotnet restore --verbosity minimal
+
+# Copy source code
+COPY src/ ./src/
+COPY shared/ ./shared/
+
+# Build and publish
+RUN --mount=type=cache,target=/root/.nuget/packages \
+    dotnet publish src/${PROJECT_NAME} -c ${CONFIGURATION} -o /app/publish \
+    --no-restore --verbosity minimal \
+    --self-contained false \
+    /p:PublishReadyToRun=true
+
+# Runtime stage
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
+
+# Runtime arguments
+ARG SERVICE_NAME=fks-service
+ARG SERVICE_TYPE=ninja
+ARG SERVICE_PORT=8080
+ARG USER_ID=1088
+
+# FKS standard environment variables
+ENV FKS_SERVICE_NAME=${SERVICE_NAME} \
+    FKS_SERVICE_TYPE=${SERVICE_TYPE} \
+    FKS_SERVICE_PORT=${SERVICE_PORT} \
+    FKS_ENVIRONMENT=production \
+    FKS_LOG_LEVEL=Information \
+    FKS_HEALTH_CHECK_PATH=/health \
+    FKS_METRICS_PATH=/metrics \
+    FKS_CONFIG_PATH=/app/config \
+    FKS_DATA_PATH=/app/data
+
+# ASP.NET Core specific environment variables
+ENV ASPNETCORE_ENVIRONMENT=Production \
+    ASPNETCORE_URLS=http://+:${SERVICE_PORT} \
+    ASPNETCORE_CONTENTROOT=/app \
+    ASPNETCORE_LOGGING__CONSOLE__DISABLECOLORS=true
+
+# Install curl for health checks and CA certificates
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy published application from build stage
+COPY --from=build /app/publish .
+
+# Copy shared configuration if available  
+RUN mkdir -p ./config/
+RUN if [ -d "/src/shared/config/" ]; then cp -r /src/shared/config/* ./config/; fi
+
+# Create application directories
+RUN mkdir -p /app/config /app/data /app/logs && \
+    chmod -R 755 /app
+
+# Create non-root user
+RUN groupadd --gid ${USER_ID} appuser && \
+    useradd --uid ${USER_ID} --gid appuser --create-home --shell /bin/bash appuser && \
+    chown -R appuser:appuser /app
+
+# Health check configuration
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:${SERVICE_PORT}${FKS_HEALTH_CHECK_PATH} || exit 1
+
+# Switch to non-root user
+USER appuser
+
+# Expose service port
+EXPOSE ${SERVICE_PORT}
+
+# Default entrypoint - will be overridden by specific service
+ENTRYPOINT ["dotnet", "FKSService.dll"]

@@ -1,0 +1,10 @@
+name: lint-python
+description: Run python linting (ruff + mypy optional)
+runs:
+  using: composite
+  steps:
+    - run: |
+        pip install ruff mypy || pip install ruff
+        ruff check .
+        if command -v mypy >/dev/null 2>&1; then mypy || true; fi
+      shell: bash

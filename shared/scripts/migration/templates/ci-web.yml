@@ -1,0 +1,27 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install
+        run: npm ci
+      - name: Lint
+        run: npm run lint:changed || npm run lint
+      - name: Type Check
+        run: npm run type-check
+      - name: Test
+        run: npm run test:run
+      - name: Build
+        run: npm run build
+      - name: Schema Assert
+        if: hashFiles('schema_assert.py') != ''
+        run: |
+          python3 schema_assert.py || (echo 'Schema mismatch' && exit 1)

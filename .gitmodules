@@ -1,0 +1,24 @@
+[submodule "shared/actions"]
+	path = shared/actions
+	url = https://github.com/nuniesmith/shared_actions.git
+[submodule "shared/docker"]
+	path = shared/docker
+	url = https://github.com/nuniesmith/shared_docker.git
+[submodule "shared/python"]
+	path = shared/python
+	url = https://github.com/nuniesmith/shared_python.git
+[submodule "shared/schema"]
+	path = shared/schema
+	url = https://github.com/nuniesmith/shared_schema.git
+[submodule "shared/scripts"]
+	path = shared/scripts
+	url = https://github.com/nuniesmith/shared_scripts.git
+[submodule "shared/rust"]
+	path = shared/rust
+	url = https://github.com/nuniesmith/shared_rust.git
+[submodule "shared/nginx"]
+	path = shared/nginx
+	url = https://github.com/nuniesmith/shared_nginx.git
+[submodule "shared/react"]
+	path = shared/react
+	url = https://github.com/nuniesmith/shared_react.git

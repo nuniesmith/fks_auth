@@ -1,0 +1,11 @@
+name: deploy
+description: Example placeholder deploy step
+inputs:
+  script:
+    required: false
+    default: echo 'Deploy placeholder'
+runs:
+  using: composite
+  steps:
+    - run: ${{ inputs.script }}
+      shell: bash

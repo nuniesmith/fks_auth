@@ -1,0 +1,21 @@
+{
+  "total_files": 344,
+  "by_extension": {
+    ".toml": 1,
+    ".md": 1,
+    "NOEXT": 72,
+    ".lock": 5,
+    ".sha256": 1,
+    ".rs": 6,
+    ".TAG": 1,
+    ".json": 26,
+    ".d": 21,
+    ".rmeta": 13,
+    ".rlib": 13,
+    ".so": 1,
+    ".o": 145,
+    ".bin": 12,
+    ".timestamp": 25,
+    ".yml": 1
+  }
+}

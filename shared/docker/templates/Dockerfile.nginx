@@ -1,0 +1,144 @@
+# Docker Template - Enhanced Nginx Service
+# Template for FKS Nginx reverse proxy with standardized configuration
+
+FROM nginx:1.27.1-alpine AS runtime
+
+# Runtime arguments
+ARG SERVICE_NAME=fks-nginx
+ARG SERVICE_TYPE=proxy
+ARG SERVICE_PORT=80
+ARG USER_ID=1088
+
+# FKS standard environment variables
+ENV FKS_SERVICE_NAME=${SERVICE_NAME} \
+    FKS_SERVICE_TYPE=${SERVICE_TYPE} \
+    FKS_SERVICE_PORT=${SERVICE_PORT} \
+    FKS_ENVIRONMENT=production \
+    FKS_LOG_LEVEL=info \
+    FKS_HEALTH_CHECK_PATH=/health \
+    FKS_METRICS_PATH=/metrics \
+    FKS_CONFIG_PATH=/etc/nginx/conf.d \
+    FKS_SSL_PATH=/etc/nginx/ssl
+
+# Install curl for health checks
+RUN apk add --no-cache curl ca-certificates
+
+# Create nginx configuration directory structure
+RUN mkdir -p /etc/nginx/conf.d /etc/nginx/includes /etc/nginx/ssl /var/log/nginx /var/cache/nginx
+
+# Create FKS standard nginx configuration
+COPY <<'EOF' /etc/nginx/templates/default.conf.template
+# FKS Standard Nginx Configuration Template
+
+# Upstream definitions for FKS services
+upstream fks-api {
+    server ${FKS_API_HOST:-fks-api}:${FKS_API_PORT:-8001};
+}
+
+upstream fks-auth {
+    server ${FKS_AUTH_HOST:-fks-auth}:${FKS_AUTH_PORT:-8002};
+}
+
+upstream fks-data {
+    server ${FKS_DATA_HOST:-fks-data}:${FKS_DATA_PORT:-8003};
+}
+
+upstream fks-engine {
+    server ${FKS_ENGINE_HOST:-fks-engine}:${FKS_ENGINE_PORT:-8004};
+}
+
+upstream fks-web {
+    server ${FKS_WEB_HOST:-fks-web}:${FKS_WEB_PORT:-3000};
+}
+
+# Rate limiting zones
+limit_req_zone $$remote_addr zone=api_limit:10m rate=10r/s;
+limit_req_zone $$remote_addr zone=auth_limit:10m rate=5r/s;
+
+server {
+    listen ${SERVICE_PORT};
+    server_name ${FKS_SERVER_NAME:-localhost};
+
+    # FKS standard headers
+    add_header X-Service-Name "${FKS_SERVICE_NAME}";
+    add_header X-Service-Type "${FKS_SERVICE_TYPE}";
+    add_header X-Content-Type-Options nosniff;
+    add_header X-Frame-Options DENY;
+    add_header X-XSS-Protection "1; mode=block";
+
+    # Health check endpoint
+    location ${FKS_HEALTH_CHECK_PATH} {
+        access_log off;
+        return 200 '{"status":"healthy","service":"${FKS_SERVICE_NAME}","upstreams":{"api":"ok","auth":"ok","data":"ok","engine":"ok","web":"ok"}}';
+        add_header Content-Type application/json;
+    }
+
+    # Metrics endpoint
+    location ${FKS_METRICS_PATH} {
+        access_log off;
+        stub_status on;
+    }
+
+    # API routes with rate limiting
+    location /api/ {
+        limit_req zone=api_limit burst=20 nodelay;
+        proxy_pass http://fks-api/;
+        include /etc/nginx/includes/proxy-headers.conf;
+    }
+
+    # Authentication routes
+    location /auth/ {
+        limit_req zone=auth_limit burst=10 nodelay;
+        proxy_pass http://fks-auth/;
+        include /etc/nginx/includes/proxy-headers.conf;
+    }
+
+    # Data service routes
+    location /data/ {
+        proxy_pass http://fks-data/;
+        include /etc/nginx/includes/proxy-headers.conf;
+    }
+
+    # Engine service routes
+    location /engine/ {
+        proxy_pass http://fks-engine/;
+        include /etc/nginx/includes/proxy-headers.conf;
+    }
+
+    # Web application
+    location / {
+        proxy_pass http://fks-web/;
+        include /etc/nginx/includes/proxy-headers.conf;
+    }
+}
+EOF
+
+# Create proxy headers include file
+COPY <<'EOF' /etc/nginx/includes/proxy-headers.conf
+proxy_set_header Host $$host;
+proxy_set_header X-Real-IP $$remote_addr;
+proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $$scheme;
+proxy_set_header X-Forwarded-Host $$host;
+proxy_connect_timeout 30s;
+proxy_send_timeout 30s;
+proxy_read_timeout 30s;
+EOF
+
+# Create non-root user and adjust permissions
+RUN addgroup -g ${USER_ID} appuser && \
+    adduser -D -u ${USER_ID} -G appuser appuser && \
+    chown -R appuser:appuser /var/cache/nginx /var/log/nginx /etc/nginx/conf.d
+
+# Health check configuration
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:${SERVICE_PORT}${FKS_HEALTH_CHECK_PATH} || exit 1
+
+# Switch to non-root user  
+USER appuser
+
+# Expose service port
+EXPOSE ${SERVICE_PORT}
+
+# Start nginx with environment variable substitution
+CMD ["nginx", "-g", "daemon off;"]

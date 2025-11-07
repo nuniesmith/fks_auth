@@ -1,0 +1,9 @@
+name: lint-react
+description: Run eslint
+runs:
+  using: composite
+  steps:
+    - run: |
+        npm ci --no-audit --no-fund
+        npm run lint
+      shell: bash

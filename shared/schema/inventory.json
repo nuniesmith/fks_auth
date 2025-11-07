@@ -1,0 +1,10 @@
+{
+  "total_files": 5,
+  "by_extension": {
+    ".json": 1,
+    "NOEXT": 1,
+    ".md": 1,
+    ".sha256": 1,
+    ".yml": 1
+  }
+}

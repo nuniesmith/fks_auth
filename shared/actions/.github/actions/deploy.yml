@@ -1,0 +1,1268 @@
+name: 🚀 Streamlined Service Deployment
+
+# Simplified workflow that leverages scripts for all heavy lifting
+# Follows stage0 (GitHub runner) -> stage1 (Arch setup) -> stage2 (systemd ready) pattern
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: 'Service to deploy (fks, nginx, ats, etc.)'
+        required: true
+        type: string
+      source_repository:
+        description: 'Source repository name (defaults to service_name)'
+        required: false
+        type: string
+      action_type:
+        description: 'Action: deploy, destroy, health-check, restart'
+        required: false
+        type: string
+        default: 'deploy'
+      server_type:
+        description: 'Linode server type'
+        required: false
+        type: string
+        default: 'g6-nanode-1'
+      target_region:
+        description: 'Linode region'
+        required: false
+        type: string
+        default: 'us-central'
+      domain_suffix:
+        description: 'Domain suffix'
+        required: false
+        type: string
+        default: '7gram.xyz'
+      custom_domain:
+        description: 'Override full domain (e.g., api.fkstrading.xyz)'
+        required: false
+        type: string
+      overwrite_server:
+        description: 'Destroy and recreate server'
+        required: false
+        type: boolean
+        default: false
+      deployment_mode:
+        description: 'Deployment mode: single (default), multi (matrix), or home (static servers)'
+        required: false
+        type: string
+        default: 'single'
+      instance_matrix:
+        description: 'JSON array of instance names for multi mode, e.g. ["api","web","auth"]'
+        required: false
+        type: string
+        default: '[]'
+      home_target_host:
+        description: 'Host to SSH for home mode (hostname or IP)'
+        required: false
+        type: string
+      home_service_user:
+        description: 'Service user on home server (e.g., freddy_user)'
+        required: false
+        type: string
+      home_repo_url:
+        description: 'Repo URL for home deploy (defaults to https://github.com/nuniesmith/<service>.git)'
+        required: false
+        type: string
+      jump_host:
+        description: 'Optional SSH jump host for home deployments (e.g., nginx.7gram.xyz)'
+        required: false
+        type: string
+      runner_label:
+        description: 'Runner label to execute jobs on (e.g., self-hosted, ubuntu-latest)'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    
+    secrets:
+      LINODE_CLI_TOKEN:
+        required: true
+      SERVICE_ROOT_PASSWORD:
+        required: true
+      ACTIONS_USER_PASSWORD:
+        required: true
+      JORDAN_PASSWORD:
+        required: true
+      TS_OAUTH_CLIENT_ID:
+        required: true
+      TS_OAUTH_SECRET:
+        required: true
+      TAILSCALE_TAILNET:
+        required: true
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ZONE_ID:
+        required: true
+      ADMIN_EMAIL:
+        required: true
+      # Enhanced Security and Configuration Secrets
+      SERVICE_USER_PASSWORD:
+        required: false
+      SSL_STAGING:
+        required: false
+      AUTHENTIK_JWT_SECRET:
+        required: false
+      JWT_SECRET_KEY:
+        required: false
+      NGINX_AUTH_USER:
+        required: false
+      NGINX_AUTH_PASS:
+        required: false
+      DISCORD_WEBHOOK_URL:
+        required: false
+      DOCKER_TOKEN:
+        required: false
+      DOCKER_USERNAME:
+        required: false
+      FULLY_QUALIFIED_DOMAIN_NAME:
+        required: false
+      TOP_LEVEL_DOMAIN:
+        required: false
+      NETDATA_CLAIM_ROOM:
+        required: false
+      NETDATA_CLAIM_TOKEN:
+        required: false
+      # SSH Public Keys for authorized access
+      DESKTOP_SSH_PUB:
+        required: false
+      FREDDY_SSH_PUB:
+        required: false
+      MACBOOK_SSH_PUB:
+        required: false
+      ORYX_SSH_PUB:
+        required: false
+      SULLIVAN_SSH_PUB:
+        required: false
+      SSH_PRIVATE_KEY:
+        required: false
+      HOME_ROOT_SSH_KEY:
+        required: false
+
+    outputs:
+      server_id:
+        value: ${{ jobs.infrastructure.outputs.server_id }}
+      server_ip:
+        value: ${{ jobs.infrastructure.outputs.server_ip }}
+      tailscale_ip:
+        value: ${{ jobs.infrastructure.outputs.tailscale_ip }}
+      deployment_status:
+        value: ${{ jobs.infrastructure.outputs.deployment_status }}
+      restart_status:
+        value: ${{ jobs.service-restart.outputs.status }}
+      destruction_status:
+        value: ${{ jobs.service-destroy.outputs.status }}
+
+env:
+  SERVICE_NAME: ${{ inputs.service_name }}
+  SOURCE_REPOSITORY: ${{ inputs.source_repository || inputs.service_name }}
+  ACTION_TYPE: ${{ inputs.action_type }}
+  FULL_DOMAIN: ${{ inputs.custom_domain || format('{0}.{1}', inputs.service_name, inputs.domain_suffix) }}
+
+jobs:
+  # ============================================================================
+  # Stage 0: Preflight Checks & Validation  
+  # ============================================================================
+  stage0-preflight:
+    name: 🚦 Stage 0 - Preflight Checks
+    runs-on: ${{ inputs.runner_label }}
+    outputs:
+      should_deploy: ${{ steps.stage0.outputs.should_deploy }}
+      should_destroy: ${{ steps.stage0.outputs.should_destroy }}
+      should_health_check: ${{ steps.stage0.outputs.should_health_check }}
+      should_overwrite_server: ${{ steps.stage0.outputs.should_overwrite_server }}
+      destroy_confirmed: ${{ steps.stage0.outputs.destroy_confirmed }}
+      docker_build_needed: ${{ steps.stage0.outputs.docker_build_needed }}
+      secrets_validated: ${{ steps.stage0.outputs.secrets_validated }}
+      stage0_complete: ${{ steps.stage0.outputs.stage0_complete }}
+    
+    steps:
+      - name: ✅ Run Stage 0 - Preflight Checks
+        id: stage0
+        env:
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
+          SERVICE_ROOT_PASSWORD: ${{ secrets.SERVICE_ROOT_PASSWORD }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+          JORDAN_PASSWORD: ${{ secrets.JORDAN_PASSWORD }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TAILSCALE_TAILNET: ${{ secrets.TAILSCALE_TAILNET }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/stage0-preflight.sh || true
+          # Run if present, else fall back to defaults
+          if [[ -x ./scripts/stage0-preflight.sh ]]; then
+            ./scripts/stage0-preflight.sh \
+              "${{ env.SERVICE_NAME }}" \
+              "${{ env.ACTION_TYPE }}" \
+              "${{ inputs.overwrite_server }}" \
+              "true"
+          fi
+
+          # Copy outputs from stage0 script
+          if [[ -f /tmp/stage0-outputs/github_output ]]; then
+            cat /tmp/stage0-outputs/github_output >> $GITHUB_OUTPUT
+          else
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+            echo "should_destroy=false" >> $GITHUB_OUTPUT
+            echo "should_health_check=false" >> $GITHUB_OUTPUT
+            echo "should_overwrite_server=${{ inputs.overwrite_server }}" >> $GITHUB_OUTPUT
+            echo "destroy_confirmed=false" >> $GITHUB_OUTPUT
+            echo "docker_build_needed=false" >> $GITHUB_OUTPUT
+            echo "secrets_validated=true" >> $GITHUB_OUTPUT
+            echo "stage0_complete=true" >> $GITHUB_OUTPUT
+          fi
+
+  # ============================================================================
+  # STAGE 1: Infrastructure (Arch Linux Server Creation)
+  # ============================================================================
+  infrastructure:
+    name: 🏗️ Stage 1 - Infrastructure
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 30
+    needs: [stage0-preflight]
+    if: needs.stage0-preflight.outputs.should_deploy == 'true' && inputs.deployment_mode != 'multi' && inputs.deployment_mode != 'home'
+    
+    outputs:
+      server_id: ${{ steps.linode.outputs.server_id }}
+      server_ip: ${{ steps.linode.outputs.server_ip }}
+      tailscale_ip: ${{ steps.tailscale.outputs.tailscale_ip }}
+      deployment_status: ${{ steps.deploy.outputs.status }}
+    
+    steps:
+      - name: 🔍 Debug Infrastructure Job Start
+        run: |
+          echo "🔍 DEBUG: Infrastructure job starting..."
+          echo "🔍 DEBUG: Stage0 outputs:"
+          echo "  should_deploy: '${{ needs.stage0-preflight.outputs.should_deploy }}'"
+          echo "  should_destroy: '${{ needs.stage0-preflight.outputs.should_destroy }}'"
+          echo "  stage0_complete: '${{ needs.stage0-preflight.outputs.stage0_complete }}'"
+          echo "🔍 DEBUG: Infrastructure job condition check:"
+          echo "  needs.stage0-preflight.outputs.should_deploy == 'true': ${{ needs.stage0-preflight.outputs.should_deploy == 'true' }}"
+          echo "✅ Infrastructure job is running!"
+      
+      - name: 📁 Checkout Actions
+        uses: actions/checkout@v4
+        with:
+          repository: nuniesmith/actions
+          token: ${{ github.token }}
+      
+      - name: 🧹 Pre-deployment Cleanup (when overwriting)
+        if: inputs.overwrite_server == true
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TAILSCALE_TAILNET: ${{ secrets.TAILSCALE_TAILNET }}
+        run: |
+          echo "🧹 Cleaning up Tailscale devices for ${{ env.SERVICE_NAME }} before server overwrite..."
+          
+          # Clean up Tailscale devices for the service (including numbered variants)
+          if [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
+            chmod +x ./scripts/cleanup/cleanup-resources.sh
+            export TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET TAILSCALE_TAILNET
+            ./scripts/cleanup/cleanup-resources.sh "${{ env.SERVICE_NAME }}" || echo "⚠️ Tailscale cleanup completed with warnings"
+            echo "✅ Pre-deployment Tailscale cleanup completed"
+          else
+            echo "⚠️ Tailscale OAuth credentials not available - skipping Tailscale cleanup"
+          fi
+      
+      - name: 🏗️ Create Server and Run Stage 1 Setup
+        id: linode
+        env:
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
+          SERVICE_ROOT_PASSWORD: ${{ secrets.SERVICE_ROOT_PASSWORD }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+          JORDAN_PASSWORD: ${{ secrets.JORDAN_PASSWORD }}
+        run: |
+          chmod +x ./scripts/linode/create-server.sh
+          # This script sets server_ip, server_id, ssh_private_key via $GITHUB_OUTPUT
+          ./scripts/linode/create-server.sh \
+            "${{ env.SERVICE_NAME }}" \
+            "${{ inputs.server_type }}" \
+            "${{ inputs.target_region }}" \
+            "${{ inputs.overwrite_server }}"
+      
+      - name: ⏳ Wait for SSH Access
+        if: steps.linode.outputs.server_ip != 'EXTRACTION_FAILED' && steps.linode.outputs.server_ip != ''
+        run: |
+          echo "⏳ Waiting for SSH access to ${{ steps.linode.outputs.server_ip }} using helper script..."
+          chmod +x ./scripts/linode/wait-for-ssh.sh
+          ./scripts/linode/wait-for-ssh.sh "${{ steps.linode.outputs.server_ip }}"
+
+      - name: 📦 Upload SSH deployment key (artifact)
+        if: steps.linode.outputs.server_ip != 'EXTRACTION_FAILED' && steps.linode.outputs.server_ip != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment_key
+          path: $HOME/.ssh/linode_deployment_key
+          if-no-files-found: error
+
+      - name: 🔧 Run Stage 1 Setup Script
+        id: deploy
+        if: steps.linode.outputs.server_ip != 'EXTRACTION_FAILED' && steps.linode.outputs.server_ip != ''
+        env:
+          SERVER_IP: ${{ steps.linode.outputs.server_ip }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+          JORDAN_PASSWORD: ${{ secrets.JORDAN_PASSWORD }}
+          SERVICE_USER_PASSWORD: ${{ secrets.SERVICE_USER_PASSWORD }}
+          SSL_STAGING: ${{ secrets.SSL_STAGING }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TAILSCALE_TAILNET: ${{ secrets.TAILSCALE_TAILNET }}
+        run: |
+          set -euo pipefail
+          echo "🔧 Preparing Stage 1 and Stage 2 scripts..."
+
+          SVC_NAME="$SERVICE_NAME"
+          SVC_SERVER_IP="$SERVER_IP"
+
+          # Prepare Stage 1 script with placeholders
+          cp ./scripts/stage1-complete-setup.sh /tmp/stage1-setup.sh
+          sed -i "s/SERVICE_NAME_PLACEHOLDER/${SVC_NAME}/g" /tmp/stage1-setup.sh
+          sed -i "s/ACTIONS_USER_PASSWORD_PLACEHOLDER/${ACTIONS_USER_PASSWORD}/g" /tmp/stage1-setup.sh
+          sed -i "s/JORDAN_PASSWORD_PLACEHOLDER/${JORDAN_PASSWORD}/g" /tmp/stage1-setup.sh
+          sed -i "s/SERVICE_USER_PASSWORD_PLACEHOLDER/${SERVICE_USER_PASSWORD}/g" /tmp/stage1-setup.sh
+          sed -i "s/SSL_STAGING_PLACEHOLDER/${SSL_STAGING}/g" /tmp/stage1-setup.sh
+
+          # Prepare Stage 2 script with Tailscale OAuth placeholders
+          cp ./scripts/stage2-post-reboot.sh /tmp/stage2-post-reboot.sh
+          sed -i "s/TS_OAUTH_CLIENT_ID_PLACEHOLDER/${TS_OAUTH_CLIENT_ID}/g" /tmp/stage2-post-reboot.sh
+          sed -i "s/TS_OAUTH_SECRET_PLACEHOLDER/${TS_OAUTH_SECRET}/g" /tmp/stage2-post-reboot.sh
+          sed -i "s/TAILSCALE_TAILNET_PLACEHOLDER/${TAILSCALE_TAILNET}/g" /tmp/stage2-post-reboot.sh
+          sed -i "s/SERVICE_NAME_PLACEHOLDER/${SVC_NAME}/g" /tmp/stage2-post-reboot.sh || true
+
+          echo "📤 Transferring Stage 1/2 scripts to server..."
+          # Setup SSH key
+          mkdir -p ~/.ssh
+          cp "$HOME/.ssh/linode_deployment_key" ~/.ssh/deployment_key
+          chmod 600 ~/.ssh/deployment_key
+
+          # Copy scripts to server (stage1 to /root, stage2 to /tmp then move)
+          scp -i ~/.ssh/deployment_key -o StrictHostKeyChecking=no /tmp/stage1-setup.sh root@"$SVC_SERVER_IP":/root/stage1-setup.sh
+          scp -i ~/.ssh/deployment_key -o StrictHostKeyChecking=no /tmp/stage2-post-reboot.sh root@"$SVC_SERVER_IP":/tmp/stage2-post-reboot.sh
+
+          echo "🚀 Installing Stage 2 script and running Stage 1..."
+          ssh -i ~/.ssh/deployment_key -o StrictHostKeyChecking=no root@"$SVC_SERVER_IP" "\
+            set -euo pipefail; \
+            install -m 0755 /tmp/stage2-post-reboot.sh /usr/local/bin/stage2-post-reboot.sh; \
+            bash /root/stage1-setup.sh; \
+            echo '✅ Stage 1 complete; rebooting...' && reboot || true \
+          "
+
+          echo "⏳ Waiting for server to reboot and SSH to return..."
+          chmod +x ./scripts/linode/wait-for-ssh.sh
+          ./scripts/linode/wait-for-ssh.sh "$SVC_SERVER_IP"
+
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: 📡 Collect Tailscale IP
+        id: tailscale
+        if: steps.linode.outputs.server_ip != 'EXTRACTION_FAILED' && steps.linode.outputs.server_ip != ''
+        env:
+          SERVER_IP: ${{ steps.linode.outputs.server_ip }}
+        run: |
+          set -euo pipefail
+          echo "🔎 Polling for Tailscale IP from /tmp/tailscale_ip..."
+          for i in {1..18}; do
+            TSIP=$(ssh -i ~/.ssh/deployment_key -o StrictHostKeyChecking=no root@"$SERVER_IP" "cat /tmp/tailscale_ip 2>/dev/null || true")
+            if [[ -n "$TSIP" && "$TSIP" != "pending" && "$TSIP" != "failed" ]]; then
+              echo "✅ Tailscale IP detected: $TSIP"
+              echo "tailscale_ip=$TSIP" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "Attempt $i/18: Tailscale IP not ready (value='$TSIP'). Waiting 10s..."
+            sleep 10
+          done
+          echo "⚠️ Tailscale IP not available yet; marking as pending"
+          echo "tailscale_ip=pending" >> $GITHUB_OUTPUT
+          #!/usr/bin/env bash
+          set -euo pipefail
+            sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null || true
+            
+            # Accept established traffic early
+            iptables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -I FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+            
+            # Allow forwarding between tailscale0 and all docker bridges (br-*)
+            iptables -C FORWARD -i tailscale0 -o br+ -j ACCEPT 2>/dev/null || iptables -I FORWARD -i tailscale0 -o br+ -j ACCEPT
+            iptables -C FORWARD -i br+ -o tailscale0 -j ACCEPT 2>/dev/null || iptables -I FORWARD -i br+ -o tailscale0 -j ACCEPT
+            
+            # Ensure DOCKER-USER does not block Tailscale traffic
+            iptables -C DOCKER-USER -i tailscale0 -j ACCEPT 2>/dev/null || iptables -I DOCKER-USER 1 -i tailscale0 -j ACCEPT
+            iptables -C DOCKER-USER -o tailscale0 -j ACCEPT 2>/dev/null || iptables -I DOCKER-USER 1 -o tailscale0 -j ACCEPT
+            
+            # Masquerade RFC1918 ranges egressing via tailscale0 for return-path correctness
+            iptables -t nat -C POSTROUTING -s 10.0.0.0/8 -o tailscale0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.0.0/8 -o tailscale0 -j MASQUERADE
+            iptables -t nat -C POSTROUTING -s 172.16.0.0/12 -o tailscale0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 172.16.0.0/12 -o tailscale0 -j MASQUERADE
+            iptables -t nat -C POSTROUTING -s 192.168.0.0/16 -o tailscale0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 192.168.0.0/16 -o tailscale0 -j MASQUERADE
+          else
+            echo 'ℹ️ tailscale0 interface not found; skipping iptables Tailnet routing config for now'
+          fi
+
+          # Prefer FKS service-specific compose files when present (e.g., api/auth/web), regardless of start.sh presence
+          if [[ '__SVC_NAME__' =~ ^fks_ ]]; then
+            SERVICE_TYPE='__SVC_NAME__'
+            SERVICE_TYPE="${SERVICE_TYPE#fks_}"
+            echo "🔍 FKS service detected (${SERVICE_TYPE}); checking for docker-compose.${SERVICE_TYPE}.yml"
+            if [[ -f "docker-compose.${SERVICE_TYPE}.yml" ]]; then
+              echo "🐳 Using service-specific compose file: docker-compose.${SERVICE_TYPE}.yml"
+              # Pre-deployment Docker network test and fix
+              echo '🔧 Testing Docker network functionality before FKS deployment...'
+              if ! docker network create test-network-$(date +%s) &>/dev/null; then
+                echo '⚠️ Docker network creation failed - applying iptables fix...'
+                systemctl stop docker.service || true
+                sleep 3
+                iptables -t nat -F DOCKER 2>/dev/null || true
+                iptables -t filter -F DOCKER 2>/dev/null || true
+                iptables -t filter -F DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
+                iptables -t filter -F DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
+                iptables -t filter -F DOCKER-USER 2>/dev/null || true
+                iptables -t filter -F DOCKER-CT 2>/dev/null || true
+                iptables -t nat -X DOCKER 2>/dev/null || true
+                iptables -t filter -X DOCKER 2>/dev/null || true
+                iptables -t filter -X DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
+                iptables -t filter -X DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
+                iptables -t filter -X DOCKER-USER 2>/dev/null || true
+                iptables -t filter -X DOCKER-CT 2>/dev/null || true
+                iptables -t filter -N DOCKER 2>/dev/null || true
+                iptables -t nat -N DOCKER 2>/dev/null || true
+                iptables -t filter -N DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
+                iptables -t filter -N DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
+                iptables -t filter -N DOCKER-USER 2>/dev/null || true
+                iptables -t filter -N DOCKER-CT 2>/dev/null || true
+                iptables -t filter -N DOCKER-FORWARD 2>/dev/null || true
+                iptables -t filter -N DOCKER-BRIDGE 2>/dev/null || true
+                iptables -t nat -C PREROUTING -m addrtype --dst-type LOCAL -j DOCKER 2>/dev/null || iptables -t nat -I PREROUTING -m addrtype --dst-type LOCAL -j DOCKER
+                iptables -t nat -C OUTPUT ! -d 127.0.0.0/8 -m addrtype --dst-type LOCAL -j DOCKER 2>/dev/null || iptables -t nat -I OUTPUT ! -d 127.0.0.0/8 -m addrtype --dst-type LOCAL -j DOCKER
+                iptables -t filter -C FORWARD -j DOCKER-USER 2>/dev/null || iptables -t filter -I FORWARD -j DOCKER-USER
+                iptables -t filter -C FORWARD -j DOCKER-ISOLATION-STAGE-1 2>/dev/null || iptables -t filter -I FORWARD -j DOCKER-ISOLATION-STAGE-1
+                iptables -t filter -C FORWARD -j DOCKER-FORWARD 2>/dev/null || iptables -t filter -I FORWARD -j DOCKER-FORWARD
+                iptables -t filter -C DOCKER-USER -j RETURN 2>/dev/null || iptables -t filter -A DOCKER-USER -j RETURN
+                iptables -t filter -C DOCKER-FORWARD -j RETURN 2>/dev/null || iptables -t filter -A DOCKER-FORWARD -j RETURN
+                systemctl start docker.service
+                sleep 10
+              else
+                docker network rm test-network-$(date +%s) &>/dev/null || true
+                echo '✅ Docker networking is working properly for FKS service'
+              fi
+
+              docker-compose -f "docker-compose.${SERVICE_TYPE}.yml" down 2>/dev/null || true
+              docker-compose -f "docker-compose.${SERVICE_TYPE}.yml" pull || true
+              docker-compose -f "docker-compose.${SERVICE_TYPE}.yml" up -d
+            else
+              echo "❌ No docker-compose.${SERVICE_TYPE}.yml found for service: __SVC_NAME__"
+              exit 1
+            fi
+
+          # Deploy using start.sh if available (fallback for non-fks_* services)
+          elif [[ -f 'start.sh' ]]; then
+            echo '🚀 Found start.sh - using custom deployment script'
+            chmod +x start.sh
+            
+            # Pass environment variables to service user for universal template
+            su - __SVC_NAME___user -c "
+              export SERVICE_NAME='$SERVICE_NAME'
+              export SERVICE_DISPLAY_NAME='$SERVICE_DISPLAY_NAME'
+              export DEFAULT_HTTP_PORT='$DEFAULT_HTTP_PORT'
+              export DEFAULT_HTTPS_PORT='$DEFAULT_HTTPS_PORT'
+              export SUPPORTS_GPU='$SUPPORTS_GPU'
+              export SUPPORTS_MINIMAL='$SUPPORTS_MINIMAL'
+              export SUPPORTS_DEV='$SUPPORTS_DEV'
+              export HAS_NETDATA='$HAS_NETDATA'
+              export HAS_SSL='$HAS_SSL'
+              export GITHUB_ACTIONS='$GITHUB_ACTIONS'
+              cd /home/__SVC_NAME___user/$REPO_DIR && ./start.sh
+            "
+          elif [[ -f 'docker-compose.yml' ]]; then
+            echo '🐳 Found docker-compose.yml - using Docker Compose deployment'
+            
+            # Pre-deployment Docker network test and fix
+            echo '🔧 Testing Docker network functionality before deployment...'
+            if ! docker network create test-network-$(date +%s) &>/dev/null; then
+              echo '⚠️ Docker network creation failed - applying iptables fix...'
+              
+              # Apply Docker iptables fix
+              systemctl stop docker.service || true
+              sleep 3
+              
+              # Clean up existing Docker iptables chains
+              iptables -t nat -F DOCKER 2>/dev/null || true
+              iptables -t filter -F DOCKER 2>/dev/null || true
+              iptables -t filter -F DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
+              iptables -t filter -F DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
+              iptables -t filter -F DOCKER-USER 2>/dev/null || true
+              iptables -t filter -F DOCKER-CT 2>/dev/null || true
+              iptables -t filter -F DOCKER-FORWARD 2>/dev/null || true
+              
+              iptables -t nat -X DOCKER 2>/dev/null || true
+              iptables -t filter -X DOCKER 2>/dev/null || true
+              iptables -t filter -X DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
+              iptables -t filter -X DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
+              iptables -t filter -X DOCKER-USER 2>/dev/null || true
+              iptables -t filter -X DOCKER-CT 2>/dev/null || true
+              iptables -t filter -X DOCKER-FORWARD 2>/dev/null || true
+              
+              # Recreate all required Docker iptables chains
+              iptables -t nat -N DOCKER 2>/dev/null || true
+              iptables -t filter -N DOCKER 2>/dev/null || true
+              iptables -t filter -N DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
+              iptables -t filter -N DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
+              iptables -t filter -N DOCKER-USER 2>/dev/null || true
+              iptables -t filter -N DOCKER-CT 2>/dev/null || true
+              iptables -t filter -N DOCKER-FORWARD 2>/dev/null || true
+              iptables -t filter -N DOCKER-BRIDGE 2>/dev/null || true
+              
+              # Set up Docker forwarding rules
+              iptables -t nat -C PREROUTING -m addrtype --dst-type LOCAL -j DOCKER 2>/dev/null || iptables -t nat -I PREROUTING -m addrtype --dst-type LOCAL -j DOCKER
+              iptables -t nat -C OUTPUT ! -d 127.0.0.0/8 -m addrtype --dst-type LOCAL -j DOCKER 2>/dev/null || iptables -t nat -I OUTPUT ! -d 127.0.0.0/8 -m addrtype --dst-type LOCAL -j DOCKER
+              iptables -t filter -C FORWARD -j DOCKER-USER 2>/dev/null || iptables -t filter -I FORWARD -j DOCKER-USER
+              iptables -t filter -C FORWARD -j DOCKER-ISOLATION-STAGE-1 2>/dev/null || iptables -t filter -I FORWARD -j DOCKER-ISOLATION-STAGE-1
+              iptables -t filter -C FORWARD -j DOCKER-FORWARD 2>/dev/null || iptables -t filter -I FORWARD -j DOCKER-FORWARD
+              iptables -t filter -C DOCKER-USER -j RETURN 2>/dev/null || iptables -t filter -A DOCKER-USER -j RETURN
+              iptables -t filter -C DOCKER-FORWARD -j RETURN 2>/dev/null || iptables -t filter -A DOCKER-FORWARD -j RETURN
+              
+              # Restart Docker
+              systemctl start docker.service
+              sleep 10
+              
+              # Test network creation again
+              if docker network create test-network-fix-$(date +%s) &>/dev/null; then
+                docker network rm test-network-fix-$(date +%s) &>/dev/null || true
+                echo '✅ Docker iptables fix successful'
+              else
+                echo '❌ Docker iptables fix failed - deployment may have issues'
+              fi
+            else
+              # Clean up test network
+              docker network rm test-network-$(date +%s) &>/dev/null || true
+              echo '✅ Docker networking is working properly'
+            fi
+            
+            docker-compose down 2>/dev/null || true
+            docker-compose up -d
+          # Check for service-specific docker-compose files (e.g., docker-compose.auth.yml for fks_auth)
+          elif [[ '__SVC_NAME__' =~ ^fks_ ]]; then
+            SERVICE_TYPE="__SVC_NAME__"
+            SERVICE_TYPE="${SERVICE_TYPE#fks_}"  # Extract 'auth', 'api', 'web' from 'fks_auth', etc.
+            echo "🔍 FKS service detected: __SVC_NAME__, looking for docker-compose.$SERVICE_TYPE.yml"
+            
+            # Pre-deployment Docker network test and fix
+            echo '🔧 Testing Docker network functionality before FKS deployment...'
+            if ! docker network create test-network-$(date +%s) &>/dev/null; then
+              echo '⚠️ Docker network creation failed - applying iptables fix...'
+              
+              # Apply Docker iptables fix for FKS services
+              systemctl stop docker.service || true
+              sleep 3
+              
+              # Clean up existing Docker iptables chains  
+              iptables -t nat -F DOCKER 2>/dev/null || true
+              iptables -t filter -F DOCKER 2>/dev/null || true
+              iptables -t filter -F DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
+              iptables -t filter -F DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
+              iptables -t filter -F DOCKER-USER 2>/dev/null || true
+              iptables -t filter -F DOCKER-CT 2>/dev/null || true
+              
+              iptables -t nat -X DOCKER 2>/dev/null || true
+              iptables -t filter -X DOCKER 2>/dev/null || true
+              iptables -t filter -X DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
+              iptables -t filter -X DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
+              iptables -t filter -X DOCKER-USER 2>/dev/null || true
+              iptables -t filter -X DOCKER-CT 2>/dev/null || true
+              
+              # Recreate all required Docker iptables chains
+              iptables -t nat -N DOCKER 2>/dev/null || true
+              iptables -t filter -N DOCKER 2>/dev/null || true
+              iptables -t filter -N DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
+              iptables -t filter -N DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
+              iptables -t filter -N DOCKER-USER 2>/dev/null || true
+              iptables -t filter -N DOCKER-CT 2>/dev/null || true
+              iptables -t filter -N DOCKER-FORWARD 2>/dev/null || true
+              iptables -t filter -N DOCKER-BRIDGE 2>/dev/null || true
+              
+              # Set up Docker forwarding rules
+              iptables -t nat -C PREROUTING -m addrtype --dst-type LOCAL -j DOCKER 2>/dev/null || iptables -t nat -I PREROUTING -m addrtype --dst-type LOCAL -j DOCKER
+              iptables -t nat -C OUTPUT ! -d 127.0.0.0/8 -m addrtype --dst-type LOCAL -j DOCKER 2>/dev/null || iptables -t nat -I OUTPUT ! -d 127.0.0.0/8 -m addrtype --dst-type LOCAL -j DOCKER
+              iptables -t filter -C FORWARD -j DOCKER-USER 2>/dev/null || iptables -t filter -I FORWARD -j DOCKER-USER
+              iptables -t filter -C FORWARD -j DOCKER-ISOLATION-STAGE-1 2>/dev/null || iptables -t filter -I FORWARD -j DOCKER-ISOLATION-STAGE-1
+              iptables -t filter -C FORWARD -j DOCKER-FORWARD 2>/dev/null || iptables -t filter -I FORWARD -j DOCKER-FORWARD
+              iptables -t filter -C DOCKER-USER -j RETURN 2>/dev/null || iptables -t filter -A DOCKER-USER -j RETURN
+              iptables -t filter -C DOCKER-FORWARD -j RETURN 2>/dev/null || iptables -t filter -A DOCKER-FORWARD -j RETURN
+              
+              # Restart Docker
+              systemctl start docker.service
+              sleep 10
+              
+              echo '✅ Docker iptables fix applied for FKS deployment'
+            else
+              # Clean up test network
+              docker network rm test-network-$(date +%s) &>/dev/null || true
+              echo '✅ Docker networking is working properly for FKS service'
+            fi
+            
+            if [[ -f "docker-compose.$SERVICE_TYPE.yml" ]]; then
+              echo "🐳 Using service-specific compose file: docker-compose.$SERVICE_TYPE.yml"
+              docker-compose -f "docker-compose.$SERVICE_TYPE.yml" down 2>/dev/null || true
+              docker-compose -f "docker-compose.$SERVICE_TYPE.yml" up -d
+            elif [[ -f 'docker-compose.yml' ]]; then
+              echo "🐳 Falling back to default docker-compose.yml"
+              docker-compose down 2>/dev/null || true
+              docker-compose up -d
+            else
+              echo "❌ No docker-compose file found for service: __SVC_NAME__"
+              exit 1
+            fi
+          else
+            echo "❌ No deployment method found for service: __SVC_NAME__"
+            echo "🔍 Available files in directory:"
+            ls -la
+            echo "📂 Current working directory: $(pwd)"
+            exit 1
+          fi
+          
+          # Wait for service to be fully up before proceeding to SSL setup
+          echo '⏳ Waiting for service to start up...'
+          sleep 30
+          
+          # Install Certbot if not already installed
+          if ! command -v certbot &> /dev/null; then
+            echo "🔒 Installing Certbot for Let's Encrypt certificates..."
+            # Update package database first
+            pacman -Sy --noconfirm
+            # Install certbot, cloudflare DNS plugin, and cronie for cron jobs (correct Arch Linux package names)
+            if ! pacman -S --noconfirm certbot certbot-dns-cloudflare cronie; then
+              echo "⚠️ Failed to install certbot via pacman, trying alternative approach..."
+              # Fallback: Install via pip if pacman fails
+              pacman -S --noconfirm python-pip cronie
+              pip install certbot certbot-dns-cloudflare
+            fi
+            
+            # Start and enable cronie service for cron jobs
+            systemctl enable --now cronie || echo "⚠️ Failed to start cronie service"
+            
+            # Verify installation
+            if command -v certbot &> /dev/null; then
+              echo "✅ Certbot installed successfully"
+            else
+              echo "⚠️ Certbot installation failed, will continue with self-signed certificates only"
+            fi
+            
+            # Verify crontab is available
+            if command -v crontab &> /dev/null; then
+              echo "✅ Crontab (cronie) installed successfully"
+            else
+              echo "⚠️ Crontab installation failed, automatic renewal will not be set up"
+            fi
+          fi
+          
+          # Set up Let's Encrypt certificates with Cloudflare DNS challenge
+          if [[ -n '__FULL_DOMAIN__' ]] && [[ -n '__CF_API_TOKEN__' ]] && command -v certbot &> /dev/null; then
+            echo "🔒 Setting up Let's Encrypt certificates via Cloudflare DNS..."
+            
+            # Create Cloudflare credentials file
+            mkdir -p /etc/ssl/cloudflare
+            cat > /etc/ssl/cloudflare/credentials.ini << EOF
+          dns_cloudflare_api_token = __CF_API_TOKEN__
+          EOF
+            chmod 600 /etc/ssl/cloudflare/credentials.ini
+            
+            # Request Let's Encrypt certificate with error handling
+            # Handle multiple domains by converting comma-separated list to multiple -d flags
+            FULL_DOMAIN_STR="__FULL_DOMAIN__"
+            
+            # Simple approach: replace commas with -d flags
+            DOMAIN_FLAGS=$(echo "$FULL_DOMAIN_STR" | sed 's/,/ -d /g' | sed 's/^/-d /')
+            
+            # Get the primary domain (first one before any comma)
+            PRIMARY_DOMAIN=$(echo "$FULL_DOMAIN_STR" | cut -d',' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            
+            echo "🔍 Primary domain: $PRIMARY_DOMAIN"
+            echo "🔍 Domain flags: $DOMAIN_FLAGS"
+            
+            if certbot certonly \
+              --dns-cloudflare \
+              --dns-cloudflare-credentials /etc/ssl/cloudflare/credentials.ini \
+              --dns-cloudflare-propagation-seconds 60 \
+              --non-interactive \
+              --agree-tos \
+              --email __ADMIN_EMAIL__ \
+              $DOMAIN_FLAGS \
+              --cert-name "$PRIMARY_DOMAIN"; then
+              
+              echo "✅ Let's Encrypt certificate obtained successfully!"
+            else
+              echo "⚠️ Let's Encrypt certificate request failed, continuing with self-signed certificates"
+            fi
+            
+            # Copy certificates to service directory for easy access
+            if [[ -d "/etc/letsencrypt/live/$PRIMARY_DOMAIN" ]]; then
+              echo "📋 Copying Let's Encrypt certificates to service directory..."
+              mkdir -p "/home/__SVC_NAME___user/$REPO_DIR/ssl"
+              cp /etc/letsencrypt/live/$PRIMARY_DOMAIN/fullchain.pem "/home/__SVC_NAME___user/$REPO_DIR/ssl/"
+              cp /etc/letsencrypt/live/$PRIMARY_DOMAIN/privkey.pem "/home/__SVC_NAME___user/$REPO_DIR/ssl/"
+              chown -R __SVC_NAME___user:__SVC_NAME___user "/home/__SVC_NAME___user/$REPO_DIR/ssl"
+              
+              # Set up automatic renewal
+              echo "⚙️ Setting up automatic certificate renewal..."
+              if command -v crontab >/dev/null 2>&1; then
+                (crontab -l 2>/dev/null; echo '0 12 * * * /usr/bin/certbot renew --quiet --deploy-hook "systemctl reload nginx"') | crontab -
+                echo "✅ Certificate renewal cron job set up successfully"
+              else
+                echo "❌ Warning: crontab command not found - manual renewal may be required"
+                echo 'Manual renewal command: certbot renew --quiet --deploy-hook "systemctl reload nginx"'
+              fi
+            else
+              echo "⚠️ Let's Encrypt certificate directory not found, continuing with fallback"
+            fi
+          else
+            echo "⚠️ Domain, Cloudflare API token not provided, or Certbot not available - continuing with self-signed certificates"
+          fi
+          
+          # Final SSL verification and NGINX configuration check
+          echo "🔍 Verifying SSL certificate configuration..."
+          
+          # Check for Let's Encrypt certificates first
+          if [[ -f "/home/__SVC_NAME___user/$REPO_DIR/ssl/fullchain.pem" ]]; then
+            echo "✅ SSL certificates found and properly configured"
+            echo "🔍 Certificate type: Let's Encrypt (from service directory)"
+            
+            # Check certificate validity
+            openssl x509 -in "/home/__SVC_NAME___user/$REPO_DIR/ssl/fullchain.pem" -text -noout | head -20 || echo "⚠️ Certificate validation failed"
+          elif [[ -f "/etc/ssl/selfsigned/cert.pem" ]]; then
+            echo "✅ Self-signed SSL certificates available"
+            echo "🔍 Certificate type: Self-signed (fallback)"
+            
+            # Copy self-signed certificates to service directory for consistency
+            mkdir -p "/home/__SVC_NAME___user/$REPO_DIR/ssl"
+            cp /etc/ssl/selfsigned/cert.pem "/home/__SVC_NAME___user/$REPO_DIR/ssl/fullchain.pem"
+            cp /etc/ssl/selfsigned/key.pem "/home/__SVC_NAME___user/$REPO_DIR/ssl/privkey.pem"
+            chown -R __SVC_NAME___user:__SVC_NAME___user "/home/__SVC_NAME___user/$REPO_DIR/ssl"
+          else
+            echo "❌ No SSL certificates found - this may cause issues with HTTPS"
+          fi
+            
+          # Verify NGINX can start with SSL configuration
+          if command -v nginx &> /dev/null; then
+            nginx -t && echo "✅ NGINX configuration is valid" || echo "⚠️ NGINX configuration has issues"
+          fi
+          
+          # Test HTTPS connectivity (if service is listening)
+          sleep 10
+          curl -k -I https://$PRIMARY_DOMAIN 2>/dev/null | head -5 || echo "⚠️ Service not yet responding on HTTPS (this is normal during startup)"
+          
+          echo "🎯 SSL certificate automation complete!"
+          DEPLOY_SCRIPT_EOF
+          
+          # Replace placeholders with actual values to avoid using GitHub expressions inside the script
+          sed -i "s|__SVC_NAME__|$SVC_NAME|g" /tmp/service-deploy.sh
+          sed -i "s|__SRC_REPO__|$SRC_REPO|g" /tmp/service-deploy.sh
+          sed -i "s|__FULL_DOMAIN__|$FULL_DOMAIN_VAL|g" /tmp/service-deploy.sh
+          sed -i "s|__OVERWRITE__|$OVERWRITE_FLAG|g" /tmp/service-deploy.sh
+          sed -i "s|__JWT_SECRET__|$JWT_SECRET_VAL|g" /tmp/service-deploy.sh
+          sed -i "s|__AUTHENTIK_JWT__|$AUTHENTIK_JWT_VAL|g" /tmp/service-deploy.sh
+          sed -i "s|__NGINX_AUTH_USER__|$NGINX_USER_VAL|g" /tmp/service-deploy.sh
+          sed -i "s|__NGINX_AUTH_PASS__|$NGINX_PASS_VAL|g" /tmp/service-deploy.sh
+          sed -i "s|__DOCKER_USERNAME__|$DOCKER_USER_VAL|g" /tmp/service-deploy.sh
+          sed -i "s|__DOCKER_TOKEN__|$DOCKER_TOKEN_VAL|g" /tmp/service-deploy.sh
+          sed -i "s|__CF_API_TOKEN__|$CF_API_TOKEN_VAL|g" /tmp/service-deploy.sh
+          sed -i "s|__ADMIN_EMAIL__|$ADMIN_EMAIL_VAL|g" /tmp/service-deploy.sh
+
+          chmod +x /tmp/service-deploy.sh
+          
+          # Transfer and execute deployment script
+          echo "📤 Transferring deployment script to server..."
+          scp -i ~/.ssh/deployment_key -o StrictHostKeyChecking=no /tmp/service-deploy.sh root@$SERVER_IP:/tmp/
+          
+          echo "🚀 Executing deployment script on server..."
+          ssh -i ~/.ssh/deployment_key -o StrictHostKeyChecking=no root@$SERVER_IP "/tmp/service-deploy.sh"
+          
+          echo "status=success" >> $GITHUB_OUTPUT
+
+  # ============================================================================
+  # Service Restart
+  # ============================================================================  
+  service-restart:
+    name: 🔄 Service Restart
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    needs: [stage0-preflight, infrastructure]
+    if: |
+      inputs.action_type == 'restart' &&
+      needs.infrastructure.result == 'success'
+    outputs:
+      status: ${{ steps.restart.outputs.status }}
+    steps:
+      - name: 📁 Checkout Actions
+        uses: actions/checkout@v4
+        with:
+          repository: nuniesmith/actions
+          token: ${{ github.token }}
+
+      - name:  Download SSH key artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment_key
+          path: /tmp/key
+
+      - name: 🔐 Install SSH key
+        run: |
+          mkdir -p ~/.ssh
+          cp /tmp/key/linode_deployment_key ~/.ssh/deployment_key
+          chmod 600 ~/.ssh/deployment_key
+
+      - name: 🔄 Restart Service
+        id: restart
+        env:
+          SERVER_IP: ${{ needs.infrastructure.outputs.server_ip }}
+        run: |
+          echo "🔄 Restarting ${{ env.SERVICE_NAME }} service..."
+          
+          # Restart service on server
+          ssh -i ~/.ssh/deployment_key -o StrictHostKeyChecking=no root@$SERVER_IP "
+            # Determine the correct directory name (use source repository for multi-service architectures)
+            if [[ '${{ env.SOURCE_REPOSITORY }}' != '${{ env.SERVICE_NAME }}' ]]; then
+              REPO_DIR='${{ env.SOURCE_REPOSITORY }}'
+              echo '📁 Multi-service restart: Using source repository directory: \$REPO_DIR'
+            else
+              REPO_DIR='${{ env.SERVICE_NAME }}'
+              echo '📁 Single-service restart: Using service directory: \$REPO_DIR'
+            fi
+            
+            cd /home/${{ env.SERVICE_NAME }}_user/\$REPO_DIR
+            
+            # Try to restart using docker-compose
+            if [[ -f 'docker-compose.yml' ]]; then
+              docker-compose restart
+            # Check for service-specific docker-compose files for FKS services
+            elif [[ '${{ env.SERVICE_NAME }}' =~ ^fks_ ]]; then
+              SERVICE_TYPE='${SERVICE_NAME#fks_}'  # Extract service type
+              if [[ -f \"docker-compose.\$SERVICE_TYPE.yml\" ]]; then
+                echo \"🔄 Restarting using: docker-compose.\$SERVICE_TYPE.yml\"
+                docker-compose -f \"docker-compose.\$SERVICE_TYPE.yml\" restart
+              else
+                echo \"❌ No compose file found for service: ${{ env.SERVICE_NAME }}\"
+                exit 1
+              fi
+            # Try to restart using systemd service
+            elif systemctl list-units --type=service | grep -q '${{ env.SERVICE_NAME }}'; then
+              systemctl restart ${{ env.SERVICE_NAME }}
+            # Try to restart using start.sh
+            elif [[ -f 'start.sh' ]]; then
+              # Stop any running processes
+              pkill -f '${{ env.SERVICE_NAME }}' || true
+              sleep 5
+              # Start again
+              su - ${{ env.SERVICE_NAME }}_user -c 'cd /home/${{ env.SERVICE_NAME }}_user/${{ env.SERVICE_NAME }} && ./start.sh'
+            else
+              echo '❌ No restart method found'
+              exit 1
+            fi
+            
+            echo '✅ Service restart completed'
+          "
+          
+          echo "status=success" >> $GITHUB_OUTPUT
+          
+
+  # ============================================================================
+  # Service Destruction
+  # ============================================================================  
+  service-destroy:
+    name: 💥 Service Destroy
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 15
+    needs: [stage0-preflight]
+    if: |
+      needs.stage0-preflight.outputs.should_destroy == 'true' &&
+      inputs.action_type == 'destroy'
+    
+    outputs:
+      status: ${{ steps.destroy.outputs.status }}
+    
+    steps:
+      - name: 📁 Checkout Actions
+        uses: actions/checkout@v4
+        with:
+          repository: nuniesmith/actions
+          token: ${{ github.token }}
+      
+      - name: 💥 Destroy Service Infrastructure
+        id: destroy
+        env:
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TAILSCALE_TAILNET: ${{ secrets.TAILSCALE_TAILNET }}
+        run: |
+          # Install Linode CLI
+          pip install linode-cli
+          export LINODE_CLI_TOKEN="${{ secrets.LINODE_CLI_TOKEN }}"
+          
+          echo "💥 Destroying service infrastructure for ${{ env.SERVICE_NAME }}..."
+          
+          # Find and destroy server(s)
+          SERVER_LABEL="${{ env.SERVICE_NAME }}"
+          
+          # Look for exact match first, then pattern match for timestamped versions
+          SERVER_INFO=$(linode-cli linodes list --text --no-headers | grep -E "^[0-9]+\s+$SERVER_LABEL(\s|-[0-9]+\s)" || true)
+          
+          if [[ -n "$SERVER_INFO" ]]; then
+            # Handle multiple servers if found
+            echo "$SERVER_INFO" | while read -r server_line; do
+              if [[ -n "$server_line" ]]; then
+                SERVER_ID=$(echo "$server_line" | cut -f1)
+                SERVER_NAME=$(echo "$server_line" | cut -f2)
+                echo "🗑️ Destroying server: $SERVER_NAME (ID: $SERVER_ID)"
+                linode-cli linodes delete "$SERVER_ID" || echo "⚠️ Server $SERVER_ID may already be deleted"
+              fi
+            done
+            echo "✅ Server destruction initiated"
+          else
+            echo "ℹ️ No server found with label pattern: $SERVER_LABEL"
+          fi
+          
+          # Clean up Tailscale devices
+          echo "🔗 Cleaning up Tailscale devices..."
+          if [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
+            chmod +x ./scripts/cleanup/cleanup-resources.sh
+            export TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET TAILSCALE_TAILNET
+            ./scripts/cleanup/cleanup-resources.sh "${{ env.SERVICE_NAME }}" || echo "⚠️ Tailscale cleanup may have failed"
+          else
+            echo "⚠️ Tailscale OAuth credentials not available - skipping Tailscale cleanup"
+          fi
+          
+          # Clean up DNS records (set to localhost to disable)
+          echo "🌐 Cleaning up DNS records..."
+          chmod +x ./scripts/dns/cloudflare-updater.sh
+          ./scripts/dns/cloudflare-updater.sh update-service \
+            --service "${{ env.SERVICE_NAME }}" \
+            --ip "127.0.0.1" \
+            --domain "${{ inputs.domain_suffix }}" \
+            --token "$CLOUDFLARE_API_TOKEN" \
+            --zone-id "$CLOUDFLARE_ZONE_ID" || echo "⚠️ DNS cleanup may have failed"
+          
+          echo "status=success" >> $GITHUB_OUTPUT
+
+  # ============================================================================
+  # Health Checks
+  # ============================================================================
+  health-check:
+    name: 🏥 Health Check
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    needs: [infrastructure]
+    if: |
+      always() &&
+      needs.infrastructure.result == 'success' &&
+      inputs.action_type == 'health-check'
+    
+    steps:
+      - name: 📁 Checkout Actions
+        uses: actions/checkout@v4
+        with:
+          repository: nuniesmith/actions
+          token: ${{ github.token }}
+      
+      - name: 📥 Download SSH key artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment_key
+          path: /tmp/key
+
+      - name: 🔐 Install SSH key
+        run: |
+          mkdir -p ~/.ssh
+          cp /tmp/key/linode_deployment_key ~/.ssh/deployment_key
+          chmod 600 ~/.ssh/deployment_key
+
+      - name: 🏥 Run Health Checks
+        env:
+          SERVER_IP: ${{ needs.infrastructure.outputs.server_ip }}
+          TAILSCALE_IP: ${{ needs.infrastructure.outputs.tailscale_ip }}
+        run: |
+          if [[ -n "$SERVER_IP" ]]; then
+            chmod +x ./scripts/health/service-health-check.sh
+            ./scripts/health/service-health-check.sh \
+              "${{ env.SERVICE_NAME }}" \
+              "$SERVER_IP" \
+              "$TAILSCALE_IP"
+          fi
+
+  # ============================================================================
+  # Home Deploy (Static Servers via SSH)
+  # ============================================================================
+  home-deploy:
+    name: 🏠 Home Deploy
+    runs-on: ${{ inputs.runner_label }}
+    needs: [stage0-preflight]
+    if: needs.stage0-preflight.outputs.should_deploy == 'true' && inputs.deployment_mode == 'home' && inputs.action_type == 'deploy'
+    steps:
+      - name: 📁 Checkout Actions
+        uses: actions/checkout@v4
+        with:
+          repository: nuniesmith/actions
+          token: ${{ github.token }}
+
+      - name: 🔐 Prepare SSH keys
+        id: ssh
+        run: |
+          set -e
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          # Primary key for actions_user or jump host hops
+          if [[ -n "${{ secrets.SSH_PRIVATE_KEY }}" ]]; then
+            echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+            chmod 600 ~/.ssh/id_rsa
+          fi
+          # Optional root key for direct root bootstrap
+          if [[ -n "${{ secrets.HOME_ROOT_SSH_KEY }}" ]]; then
+            echo "${{ secrets.HOME_ROOT_SSH_KEY }}" > ~/.ssh/id_root
+            chmod 600 ~/.ssh/id_root
+          fi
+          touch ~/.ssh/known_hosts
+          if [[ -n "${{ inputs.jump_host }}" ]]; then
+            ssh-keyscan -H "${{ inputs.jump_host }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          fi
+          ssh-keyscan -H "${{ inputs.home_target_host }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: 🚀 Bootstrap and deploy on home server
+        env:
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+          HOME_HOST: ${{ inputs.home_target_host }}
+          HOME_SVC_USER: ${{ inputs.home_service_user }}
+          HOME_REPO_URL: ${{ inputs.home_repo_url || format('https://github.com/nuniesmith/{0}.git', env.SERVICE_NAME) }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+          SERVICE_USER_PASSWORD: ${{ secrets.SERVICE_USER_PASSWORD }}
+        run: |
+          set -e
+
+          # Build SSH base args with optional ProxyJump
+          SSH_BASE=("-o" "StrictHostKeyChecking=no")
+          if [[ -n "${{ inputs.jump_host }}" ]]; then
+            SSH_BASE+=("-J" "actions_user@${{ inputs.jump_host }}")
+          fi
+
+          # Prefer root if root key is present, else use actions_user
+          if [[ -s ~/.ssh/id_root ]]; then
+            REMOTE_USER=root
+            KEYFILE=~/.ssh/id_root
+          else
+            REMOTE_USER=actions_user
+            KEYFILE=~/.ssh/id_rsa
+          fi
+
+          # Create bootstrap script
+          cat > /tmp/home_bootstrap.sh << 'BOOTSTRAP_EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          SERVICE_NAME="${SERVICE_NAME}"
+          HOME_SVC_USER="${HOME_SVC_USER}"
+          HOME_REPO_URL="${HOME_REPO_URL}"
+          ACTIONS_USER_PASSWORD="${ACTIONS_USER_PASSWORD:-}"
+          SERVICE_USER_PASSWORD="${SERVICE_USER_PASSWORD:-}"
+
+          # Create users and groups
+          ensure_user() {
+            local user="$1"; local pass="$2"; local groups="$3"
+            if ! id -u "$user" >/dev/null 2>&1; then
+              useradd -m -s /bin/bash "$user"
+            fi
+            if [[ -n "$pass" ]]; then
+              echo "$user:$pass" | chpasswd || true
+            fi
+            if [[ -n "$groups" ]]; then
+              usermod -aG "$groups" "$user" || true
+            fi
+          }
+
+          # Ensure sudo installed
+          if ! command -v sudo >/dev/null 2>&1; then
+            if command -v pacman >/dev/null 2>&1; then
+              pacman -Sy --noconfirm sudo
+            elif command -v apt-get >/dev/null 2>&1; then
+              apt-get update && apt-get install -y sudo
+            fi
+          fi
+
+          # Ensure docker installed
+          if ! command -v docker >/dev/null 2>&1; then
+            if command -v pacman >/dev/null 2>&1; then
+              pacman -Sy --noconfirm docker
+              systemctl enable --now docker
+            elif command -v apt-get >/dev/null 2>&1; then
+              apt-get update && apt-get install -y ca-certificates curl gnupg lsb-release
+              install -m 0755 -d /etc/apt/keyrings
+              curl -fsSL https://download.docker.com/linux/$(. /etc/os-release; echo "$ID")/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+              chmod a+r /etc/apt/keyrings/docker.gpg
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$(. /etc/os-release; echo "$ID") $(. /etc/os-release; echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+              apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+              systemctl enable --now docker
+            fi
+          fi
+
+          # Users: actions_user (sudo), service user (docker)
+          ensure_user actions_user "${ACTIONS_USER_PASSWORD}" wheel || ensure_user actions_user "${ACTIONS_USER_PASSWORD}" sudo || true
+          ensure_user "${HOME_SVC_USER}" "${SERVICE_USER_PASSWORD}" docker
+
+          # Ensure docker group membership active
+          usermod -aG docker actions_user || true
+
+          # Repo directory
+          APP_DIR="/home/${HOME_SVC_USER}/${SERVICE_NAME}"
+          mkdir -p "$APP_DIR"
+          chown -R ${HOME_SVC_USER}:${HOME_SVC_USER} "/home/${HOME_SVC_USER}"
+
+          # Clone or update repo
+          if [[ ! -d "$APP_DIR/.git" ]]; then
+            sudo -u ${HOME_SVC_USER} git clone "$HOME_REPO_URL" "$APP_DIR"
+          else
+            cd "$APP_DIR" && sudo -u ${HOME_SVC_USER} git pull --ff-only
+          fi
+
+          # Provide a default start.sh if missing
+          if [[ ! -x "$APP_DIR/start.sh" ]]; then
+            cat > "$APP_DIR/start.sh" << 'START_EOF'
+          #!/usr/bin/env bash
+          set -e
+          if [[ -f docker-compose.yml ]] || [[ -f docker-compose.yaml ]]; then
+            docker compose pull || true
+            docker compose up -d
+          else
+            echo "No docker-compose.yml found; nothing to start."
+          fi
+          START_EOF
+            chown ${HOME_SVC_USER}:${HOME_SVC_USER} "$APP_DIR/start.sh"
+            chmod +x "$APP_DIR/start.sh"
+          fi
+
+          # Run start.sh as service user
+          cd "$APP_DIR"
+          sudo -u ${HOME_SVC_USER} bash -lc "./start.sh"
+
+          echo "Home deployment completed for ${SERVICE_NAME} at ${APP_DIR}"
+          BOOTSTRAP_EOF
+
+          chmod +x /tmp/home_bootstrap.sh
+
+          # Execute bootstrap remotely
+          scp -i "$KEYFILE" "${SSH_BASE[@]}" /tmp/home_bootstrap.sh "$REMOTE_USER@${{ inputs.home_target_host }}:/tmp/" >/dev/null 2>&1 || true
+          ssh -i "$KEYFILE" "${SSH_BASE[@]}" "$REMOTE_USER@${{ inputs.home_target_host }}" "bash /tmp/home_bootstrap.sh"
+
+  # Post-deployment health check for successful deployments
+  post-deploy-health:
+    name: 🏥 Post-Deploy Health Check
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    needs: [infrastructure]
+    if: |
+      always() &&
+      inputs.action_type == 'deploy' &&
+      needs.infrastructure.result == 'success'
+    
+    steps:
+      - name: 📁 Checkout Actions
+        uses: actions/checkout@v4
+        with:
+          repository: nuniesmith/actions
+          token: ${{ github.token }}
+      
+      - name: 📥 Download SSH key artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment_key
+          path: /tmp/key
+
+      - name: 🔐 Install SSH key
+        run: |
+          mkdir -p ~/.ssh
+          cp /tmp/key/linode_deployment_key ~/.ssh/deployment_key
+          chmod 600 ~/.ssh/deployment_key
+
+      - name: 🏥 Run Post-Deploy Health Checks
+        env:
+          SERVER_IP: ${{ needs.infrastructure.outputs.server_ip }}
+          TAILSCALE_IP: ${{ needs.infrastructure.outputs.tailscale_ip }}
+        run: |
+          if [[ -n "$SERVER_IP" ]]; then
+            chmod +x ./scripts/health/service-health-check.sh
+            ./scripts/health/service-health-check.sh \
+              "${{ env.SERVICE_NAME }}" \
+              "$SERVER_IP" \
+              "$TAILSCALE_IP"
+          fi
+
+  # ============================================================================
+  # Summary
+  # ============================================================================
+  summary:
+    name: 📋 Summary
+    runs-on: ${{ inputs.runner_label }}
+    needs: [stage0-preflight, infrastructure, service-restart, service-destroy, health-check, post-deploy-health]
+    if: always()
+    steps:
+      - name: 📋 Deployment Summary
+        run: |
+          echo "📋 Deployment Summary for ${{ env.SERVICE_NAME }}"
+          echo "=================================================="
+          echo "🎯 Action: ${{ env.ACTION_TYPE }}"
+          echo "🖥️ Server Type: ${{ inputs.server_type }}"
+          echo "🌍 Region: ${{ inputs.target_region }}"
+          echo "🔗 Domain: ${{ env.FULL_DOMAIN }}"
+          echo ""
+          echo "📊 Job Job Results:"
+          echo "✅ Preflight: ${{ needs.stage0-preflight.result }}"
+          echo "🏗️ Infrastructure: ${{ needs.infrastructure.result }}"
+          echo "🚀 Deploy: ${{ needs.infrastructure.result }}"
+          echo "🔄 Service Restart: ${{ needs.service-restart.result }}"
+          echo "💥 Service Destroy: ${{ needs.service-destroy.result }}"
+          echo "🏥 Health Check: ${{ needs.health-check.result }}"
+          echo "🏥 Post-Deploy Health: ${{ needs.post-deploy-health.result }}"
+          if [[ "${{ needs.infrastructure.outputs.server_ip }}" ]]; then
+            echo ""
+            echo "🖥️ Server Details:"
+            echo "   📍 Public IP: ${{ needs.infrastructure.outputs.server_ip }}"
+            echo "   🔗 Tailscale IP: ${{ needs.infrastructure.outputs.tailscale_ip }}"
+            echo "   🆔 Server ID: ${{ needs.infrastructure.outputs.server_id }}"
+          fi
+          if [[ "${{ needs.infrastructure.result }}" == "success" ]]; then
+            echo ""
+            echo "🎉 Overall Status: SUCCESS"
+            echo "✅ ${{ env.SERVICE_NAME }} deployment completed!"
+          elif [[ "${{ needs.service-restart.result }}" == "success" ]]; then
+            echo ""
+            echo "🎉 Overall Status: SUCCESS"
+            echo "🔄 ${{ env.SERVICE_NAME }} restart completed!"
+          elif [[ "${{ needs.service-destroy.result }}" == "success" ]]; then
+            echo ""
+            echo "🎉 Overall Status: SUCCESS"
+            echo "💥 ${{ env.SERVICE_NAME }} destruction completed!"
+          else
+            echo ""
+            echo "❌ Overall Status: FAILED"
+            echo "💥 Check job logs for details"
+          fi
+      - name: 📢 Send Discord Notification
+        if: always()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+          ACTION_TYPE: ${{ inputs.action_type || 'deploy' }}
+          SERVER_IP: ${{ needs.infrastructure.outputs.server_ip }}
+          TAILSCALE_IP: ${{ needs.infrastructure.outputs.tailscale_ip }}
+          SERVER_ID: ${{ needs.infrastructure.outputs.server_id }}
+          INFRA_RESULT: ${{ needs.infrastructure.result }}
+          RESTART_RESULT: ${{ needs.service-restart.result }}
+          DESTROY_RESULT: ${{ needs.service-destroy.result }}
+          HEALTH_RESULT: ${{ needs.health-check.result }}
+          POST_HEALTH_RESULT: ${{ needs.post-deploy-health.result }}
+        run: |
+          echo "📢 Sending Discord notification via script..."
+          sudo apt-get update -y >/dev/null
+          sudo apt-get install -y jq >/dev/null
+          chmod +x ./scripts/notifications/notify-discord.sh
+          ./scripts/notifications/notify-discord.sh

@@ -1,0 +1,26 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deps
+        run: |
+          pip install -e shared/python || true
+          pip install -r requirements.txt 2>/dev/null || true
+          pip install pytest
+      - name: Lint
+        run: |
+          python -m py_compile $(git ls-files '*.py')
+      - name: Test
+        run: pytest -q
+      - name: Schema Assert
+        if: hashFiles('schema_assert.py') != ''
+        run: |
+          python schema_assert.py || (echo 'Schema mismatch' && exit 1)

@@ -1,0 +1,26 @@
+services:
+  fks_auth:
+    build:
+      context: .
+      dockerfile: shared/docker/templates/Dockerfile.rust
+    environment:
+      TZ: America/Toronto
+      AUTH_PORT: 4100
+      RUST_LOG: info
+    ports:
+      - "4100:4100"
+    networks: [fks_net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4100/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+
+networks:
+  fks_net:
+    name: fks_net
+    external: true

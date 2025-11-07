@@ -1,0 +1,8 @@
+name: schema-assert
+description: Assert schema submodule version equals schema_version.txt
+runs:
+  using: composite
+  steps:
+    - run: |
+        if [ -f schema_assert.py ]; then python3 schema_assert.py; else echo 'No schema_assert.py'; fi
+      shell: bash

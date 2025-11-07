@@ -1,0 +1,52 @@
+services:
+  fks_api:
+    extends:
+      file: docker-compose.yml
+      service: fks_api
+    build:
+      context: ../../fks/fks_api
+      dockerfile: Dockerfile
+    volumes:
+      - ../../fks/fks_api/src:/app/src:ro
+      - ../../fks/fks_api/shared:/app/shared:ro
+    environment:
+      APP_ENV: development
+      API_SERVICE_NAME: FKS API Dev
+    command: uvicorn fks_api.fastapi_main:app --host 0.0.0.0 --port 8000 --reload
+
+  fks_api_worker:
+    extends:
+      file: docker-compose.yml
+      service: fks_api_worker
+    build:
+      context: ../../fks/fks_api
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: development
+
+  fks_api_scheduler:
+    extends:
+      file: docker-compose.yml
+      service: fks_api_scheduler
+    build:
+      context: ../../fks/fks_api
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: development
+
+  redis:
+    extends:
+      file: docker-compose.yml
+      service: redis
+    ports:
+      - "6379:6379"
+
+  postgres:
+    extends:
+      file: docker-compose.yml
+      service: postgres
+    ports:
+      - "5432:5432"
+
+networks:
+  core: {}

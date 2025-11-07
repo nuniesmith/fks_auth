@@ -1,0 +1,58 @@
+# Common base image for FKS Trading Systems
+ARG UBUNTU_VERSION=24.04
+ARG PYTHON_VERSION=3.12
+
+FROM ubuntu:${UBUNTU_VERSION} AS fks-base
+
+# Install common system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    jq \
+    tzdata \
+    unzip \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set timezone
+ENV TZ=UTC
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# Create common user
+ARG USER_ID=1088
+RUN groupadd --gid ${USER_ID} appuser \
+    && useradd --uid ${USER_ID} --gid appuser --create-home --shell /bin/bash appuser
+
+# Common environment
+ENV PATH="/home/appuser/.local/bin:$PATH"
+
+# Labels
+LABEL maintainer="FKS Trading Systems"
+LABEL org.opencontainers.image.source="https://github.com/nuniesmith/shared_docker"
+LABEL org.opencontainers.image.description="Base image for FKS Trading Systems"
+
+# Python-specific base
+FROM fks-base AS fks-python-base
+ARG PYTHON_VERSION
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python${PYTHON_VERSION} \
+    python${PYTHON_VERSION}-venv \
+    python3-pip \
+    python3-dev \
+    build-essential \
+    libpq-dev \
+    libssl-dev \
+    pkg-config \
+    && ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python \
+    && ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Note: Python tools available via system packages
+# Services extending this template can:
+# - Use python3 -m venv /venv && /venv/bin/pip install packages
+# - Or extend from specific Dockerfile.python template instead
+
+USER appuser
+WORKDIR /home/appuser

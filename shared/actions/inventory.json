@@ -1,0 +1,13 @@
+{
+  "total_files": 90,
+  "by_extension": {
+    ".md": 30,
+    "NOEXT": 1,
+    ".sha256": 1,
+    ".yml": 7,
+    ".json": 2,
+    ".sh": 46,
+    ".bak": 1,
+    ".txt": 2
+  }
+}

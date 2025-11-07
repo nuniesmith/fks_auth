@@ -1,0 +1,334 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://fks.7gram.xyz/schemas/health-response.schema.json",
+  "title": "FKS Health Response Schema",
+  "description": "Standard health check response schema for all FKS microservices",
+  "type": "object",
+  "required": [
+    "status",
+    "service",
+    "service_type",
+    "timestamp",
+    "environment"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["healthy", "unhealthy", "degraded"],
+      "description": "Overall health status of the service"
+    },
+    "service": {
+      "type": "string",
+      "pattern": "^fks-[a-z]+$",
+      "description": "FKS service name identifier",
+      "examples": ["fks-api", "fks-auth", "fks-engine", "fks-data"]
+    },
+    "service_type": {
+      "type": "string",
+      "enum": ["api", "auth", "data", "engine", "training", "transformer", "worker", "frontend", "proxy", "ninja", "execution", "nodes", "config"],
+      "description": "Type of FKS service"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "default": "1.0.0",
+      "description": "Service version following semantic versioning"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of the health check"
+    },
+    "environment": {
+      "type": "string",
+      "enum": ["development", "dev", "staging", "production", "test"],
+      "description": "Deployment environment"
+    },
+    "uptime_seconds": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Service uptime in seconds"
+    },
+    "components": {
+      "type": "object",
+      "description": "Health status of individual service components",
+      "additionalProperties": {
+        "$ref": "#/definitions/ComponentHealth"
+      }
+    },
+    "system": {
+      "$ref": "#/definitions/SystemInfo",
+      "description": "System resource information"
+    },
+    "dependencies": {
+      "type": "object",
+      "description": "Health status of external dependencies",
+      "additionalProperties": {
+        "oneOf": [
+          {"$ref": "#/definitions/DependencyHealth"},
+          {"type": "string"}
+        ]
+      }
+    },
+    "checks_age_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Age of health check data in seconds"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional service-specific metadata",
+      "properties": {
+        "build_info": {
+          "$ref": "#/definitions/BuildInfo"
+        },
+        "config": {
+          "$ref": "#/definitions/ConfigInfo"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "ComponentHealth": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["healthy", "unhealthy", "degraded"],
+          "description": "Component health status"
+        },
+        "latency_ms": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Component response latency in milliseconds"
+        },
+        "message": {
+          "type": ["string", "null"],
+          "description": "Health check message or error details"
+        },
+        "last_check": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Last health check timestamp"
+        },
+        "details": {
+          "type": "object",
+          "description": "Component-specific health details"
+        }
+      }
+    },
+    "SystemInfo": {
+      "type": "object",
+      "required": ["cpu_percent", "memory_percent", "disk_percent", "process_id"],
+      "properties": {
+        "cpu_percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "CPU usage percentage"
+        },
+        "memory_percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Memory usage percentage"
+        },
+        "disk_percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Disk usage percentage"
+        },
+        "process_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Process ID"
+        },
+        "uptime_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "System uptime in seconds"
+        },
+        "load_average": {
+          "type": "array",
+          "items": {"type": "number", "minimum": 0},
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "System load averages (1min, 5min, 15min)"
+        },
+        "network": {
+          "$ref": "#/definitions/NetworkInfo"
+        }
+      }
+    },
+    "DependencyHealth": {
+      "type": "object",
+      "required": ["status", "name", "type"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["healthy", "unhealthy", "degraded"],
+          "description": "Dependency health status"
+        },
+        "name": {
+          "type": "string",
+          "description": "Dependency name"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["database", "cache", "api", "queue", "storage", "service"],
+          "description": "Type of dependency"
+        },
+        "latency_ms": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Dependency response latency in milliseconds"
+        },
+        "message": {
+          "type": ["string", "null"],
+          "description": "Dependency health message"
+        },
+        "last_check": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Last dependency check timestamp"
+        },
+        "endpoint": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "description": "Dependency endpoint URL"
+        },
+        "version": {
+          "type": ["string", "null"],
+          "description": "Dependency version"
+        }
+      }
+    },
+    "BuildInfo": {
+      "type": "object",
+      "properties": {
+        "commit_sha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$",
+          "description": "Git commit SHA"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Git branch name"
+        },
+        "build_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Build timestamp"
+        },
+        "build_number": {
+          "type": ["string", "number"],
+          "description": "CI/CD build number"
+        }
+      }
+    },
+    "ConfigInfo": {
+      "type": "object",
+      "properties": {
+        "fks_service_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Service port number"
+        },
+        "fks_log_level": {
+          "type": "string",
+          "enum": ["DEBUG", "INFO", "WARN", "ERROR"],
+          "description": "Log level configuration"
+        },
+        "database_enabled": {
+          "type": "boolean",
+          "description": "Whether database is configured"
+        },
+        "cache_enabled": {
+          "type": "boolean",
+          "description": "Whether cache is configured"
+        },
+        "metrics_enabled": {
+          "type": "boolean",
+          "description": "Whether metrics collection is enabled"
+        },
+        "tracing_enabled": {
+          "type": "boolean",
+          "description": "Whether distributed tracing is enabled"
+        }
+      }
+    },
+    "NetworkInfo": {
+      "type": "object",
+      "properties": {
+        "bytes_sent": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Total bytes sent over network"
+        },
+        "bytes_received": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Total bytes received over network"
+        },
+        "packets_sent": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Total packets sent over network"
+        },
+        "packets_received": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Total packets received over network"
+        },
+        "errors": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Network error count"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "status": "healthy",
+      "service": "fks-api",
+      "service_type": "api",
+      "version": "1.2.3",
+      "timestamp": "2025-08-29T10:30:00Z",
+      "environment": "production",
+      "uptime_seconds": 86400,
+      "components": {
+        "database": {
+          "status": "healthy",
+          "latency_ms": 12.5,
+          "last_check": "2025-08-29T10:30:00Z"
+        },
+        "cache": {
+          "status": "healthy",
+          "latency_ms": 2.1,
+          "last_check": "2025-08-29T10:30:00Z"
+        }
+      },
+      "system": {
+        "cpu_percent": 15.2,
+        "memory_percent": 45.8,
+        "disk_percent": 25.3,
+        "process_id": 1234,
+        "uptime_seconds": 86400
+      },
+      "dependencies": {
+        "database": {
+          "status": "healthy",
+          "name": "postgres",
+          "type": "database",
+          "latency_ms": 12.5,
+          "version": "15.4"
+        }
+      },
+      "checks_age_seconds": 0
+    }
+  ]
+}

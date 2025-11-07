@@ -1,0 +1,21 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: List files
+        run: |
+          ls -R . | head -100
+      - name: Python lint (if requirements.txt)
+        if: hashFiles('**/requirements.txt') != ''
+        run: python -m py_compile $(git ls-files '*.py') || true
+      - name: Node check (if package.json)
+        if: hashFiles('**/package.json') != ''
+        run: node -v
+      - name: Rust check (if Cargo.toml)
+        if: hashFiles('**/Cargo.toml') != ''
+        run: echo "Rust project detected (cargo not run here to stay lightweight)"

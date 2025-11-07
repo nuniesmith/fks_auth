@@ -1,0 +1,15 @@
+{
+    "name": "fks_build-api",
+    "version": "1.0.0",
+    "description": "FKS Build API for NinjaTrader addon packaging",
+    "main": "build-server.js",
+    "dependencies": {
+        "express": "5.1.0",
+        "cors": "2.8.5",
+        "archiver": "7.0.1"
+    },
+    "scripts": {
+        "start": "node build-server.js",
+        "dev": "nodemon build-server.js"
+    }
+}

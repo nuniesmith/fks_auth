@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fks.local/schema/trade_signal.schema.json",
+  "title": "TradeSignal",
+  "type": "object",
+  "required": ["symbol", "side", "strength", "timestamp", "strategy"],
+  "properties": {
+    "symbol": {"type": "string"},
+    "side": {"type": "string", "enum": ["LONG", "SHORT"]},
+    "strength": {"type": "number", "minimum": 0, "maximum": 1},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "strategy": {"type": "string"},
+    "meta": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": false
+}
