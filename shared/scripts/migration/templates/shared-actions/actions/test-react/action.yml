@@ -1,9 +1,0 @@
-name: test-react
-description: Run vitest
-runs:
-  using: composite
-  steps:
-    - run: |
-        npm ci --no-audit --no-fund
-        npm run test:run
-      shell: bash

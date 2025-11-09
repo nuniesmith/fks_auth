@@ -1,9 +1,0 @@
-name: lint-markdown
-description: Run markdownlint-cli2 on markdown files
-runs:
-  using: composite
-  steps:
-    - run: |
-        npm install -g markdownlint-cli2
-        git ls-files '*.md' | xargs -r markdownlint-cli2
-      shell: bash

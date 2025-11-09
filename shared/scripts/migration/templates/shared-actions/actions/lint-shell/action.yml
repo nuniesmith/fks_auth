@@ -1,9 +1,0 @@
-name: lint-shell
-description: Run shellcheck on shell scripts
-runs:
-  using: composite
-  steps:
-    - run: |
-        sudo apt-get update && sudo apt-get install -y shellcheck
-        git ls-files '*.sh' | xargs -r shellcheck -S warning
-      shell: bash
