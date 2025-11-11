@@ -21,8 +21,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    volumes:
-      - ./logs:/app/logs
+    # Logs stored inside container at /app/logs (not mounted externally)
+    # Access via: docker logs fks_auth
 
 networks:
   fks-network:
