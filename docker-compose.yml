@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: nuniesmith/fks_auth:latest
+    image: nuniesmith/fks:auth-latest
     container_name: fks_auth
     ports:
       - "8009:8009"
