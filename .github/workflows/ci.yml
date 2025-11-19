@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: nuniesmith/fks_actions/.github/workflows/ci-rust-service.yml@main
+    with:
+      service_name: auth
+      service_port: '8009'
+      rust_toolchain: 'stable'
+      needs_openssl: true
+    secrets:
+      docker_token: ${{ secrets.DOCKER_TOKEN }}
