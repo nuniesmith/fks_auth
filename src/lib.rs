@@ -26,7 +26,11 @@ pub struct JwtKeys { enc: EncodingKey, dec: DecodingKey, algorithm: Algorithm, a
 
 pub async fn run() -> anyhow::Result<()> {
     init_tracing();
-    let port: u16 = std::env::var("AUTH_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(4100);
+    let port: u16 = std::env::var("SERVICE_PORT")
+        .or_else(|_| std::env::var("AUTH_PORT"))
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4100);
     let user = DevUser { username: "jordan".into(), password: "567326".into(), display_name: "Jordan Dev".into() };
     let secret = std::env::var("AUTH_SECRET").unwrap_or_else(|_| "dev-insecure-secret-change".repeat(2));
     let access_ttl = std::env::var("AUTH_ACCESS_TTL_MINUTES").ok().and_then(|s| s.parse().ok()).unwrap_or(30);
