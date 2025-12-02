@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+rand = "0.8"
 axum = { version = "0.8.4", features=["macros"] }
 tokio = { version = "1.47.1", features=["rt-multi-thread","macros"] }
 serde = { version = "1.0.219", features=["derive"] }
@@ -12,12 +13,19 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features=["fmt","env-filter"] }
 thiserror = "2.0.16"
 anyhow = "1.0.99"
-lettre = { version = "0.11.18", optional = true, default-features = false, features=["smtp-transport","builder","hostname","pool"] }
 jsonwebtoken = "9.3.1"
 chrono = { version = "0.4.41", features=["clock"] }
 tower-http = { version = "0.6.6", features=["cors"] }
-uuid = { version = "1.10.0", features=["v4"] }
+uuid = { version = "1.10.0", features=["v4", "v5"] }
 urlencoding = "2.1"
+webauthn-rs = "0.4"
+base64 = "0.22"
+url = "2.5"
+openssl = { version = "0.10", features=["vendored"] }
+
+# Prometheus metrics
+axum-prometheus = "0.5.1"
+prometheus = "0.13.3"
 
 [features]
 default = ["server"]

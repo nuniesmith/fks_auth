@@ -308,4 +308,4 @@ fks_ssh-keys
 file_contents.txt
 codebase_analysis_report_*/
 codebase-analysis-report*/
-perf.json
+perf.json.cursor

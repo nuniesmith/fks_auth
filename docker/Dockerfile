@@ -1,13 +1,17 @@
 # Multi-stage build for fks_auth Rust service
-FROM rust:1.84-slim AS builder
+# Note: Using rust:1.83-slim (1.84 may not exist yet - update if needed)
+FROM rust:1.83-slim AS builder
 
 WORKDIR /app
 
 # Install build dependencies
+# Note: perl is required for openssl-sys vendored feature (builds OpenSSL from source)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     ca-certificates \
+    perl \
+    make \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Cargo files first (for better dependency caching)

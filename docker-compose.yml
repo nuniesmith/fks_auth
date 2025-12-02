@@ -2,9 +2,9 @@ services:
   fks_auth:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile
     image: nuniesmith/fks:auth-latest
-    container_name: fks_auth
+    container_name: fks-auth
     ports:
       - "8009:8009"
     environment:
@@ -12,8 +12,23 @@ services:
       - SERVICE_PORT=8009
       - RUST_LOG=info
       - TZ=America/Toronto
+      # Database Configuration (fks_auth own database)
+      - DATABASE_URL=${DATABASE_URL:-postgresql://fks_auth_user:fks_auth_password@fks_auth_db:5432/fks_auth_db}
+      - DB_HOST=${DB_HOST:-fks_auth_db}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-fks_auth_db}
+      - DB_USER=${DB_USER:-fks_auth_user}
+      - DB_PASSWORD=${DB_PASSWORD:-fks_auth_password}
+      - POSTGRES_HOST=${POSTGRES_HOST:-fks_auth_db}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-fks_auth_db}
+      - POSTGRES_USER=${POSTGRES_USER:-fks_auth_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-fks_auth_password}
     networks:
       - fks-network
+    depends_on:
+      fks_auth_db:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
@@ -23,6 +38,33 @@ services:
       start_period: 10s
     # Logs stored inside container at /app/logs (not mounted externally)
     # Access via: docker logs fks_auth
+
+  fks_auth_db:
+    image: postgres:16-alpine
+    container_name: fks-auth-db
+    environment:
+      - POSTGRES_DB=fks_auth_db
+      - POSTGRES_USER=fks_auth_user
+      - POSTGRES_PASSWORD=fks_auth_password
+      - POSTGRES_INITDB_ARGS=--encoding=UTF8
+    ports:
+      - "5435:5432"  # Use 5435 to avoid conflict with other postgres instances
+    volumes:
+      - fks_auth_db_data:/var/lib/postgresql/data
+      - ./scripts/init_auth_db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - fks-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fks_auth_user -d fks_auth_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  fks_auth_db_data:
+    driver: local
 
 networks:
   fks-network:

@@ -9,8 +9,21 @@ use tower_http::cors::{CorsLayer, Any};
 use tracing::{info, Level};
 use tracing_subscriber::{FmtSubscriber, util::SubscriberInitExt};
 
+// Passkey module
+pub mod passkey;
+
 #[derive(Clone)]
-pub struct AppState { pub dev_user: Arc<DevUser>, pub jwt: Arc<JwtKeys>, pub started_at: i64, pub revoked: Arc<RwLock<Vec<String>>> }
+pub struct AppState { 
+    pub dev_user: Arc<DevUser>, 
+    pub jwt: Arc<JwtKeys>, 
+    pub started_at: i64, 
+    pub revoked: Arc<RwLock<Vec<String>>>,
+    // Passkey (WebAuthn) support
+    pub webauthn: Option<Arc<webauthn_rs::prelude::Webauthn>>,
+    pub passkey_store: Option<passkey::PasskeyStore>,
+    pub registration_state: Option<passkey::RegistrationState>,
+    pub auth_state: Option<passkey::AuthenticationState>,
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DevUser { pub username: String, pub password: String, pub display_name: String }
@@ -24,31 +37,158 @@ pub struct DevUser { pub username: String, pub password: String, pub display_nam
 #[derive(Serialize, Deserialize)] struct Claims { sub: String, exp: usize, typ: String, iss: String, aud: String, jti: String }
 pub struct JwtKeys { enc: EncodingKey, dec: DecodingKey, algorithm: Algorithm, access_ttl: i64, refresh_ttl: i64, issuer: String, audience: String }
 
-pub async fn run() -> anyhow::Result<()> {
+pub async fn run() -> anyhow::Result<()> { run_internal(None).await }
+
+/// Run the server on a specific port (used by integration tests)
+pub async fn run_with_port(port: u16) -> anyhow::Result<()> { run_internal(Some(port)).await }
+
+async fn run_internal(override_port: Option<u16>) -> anyhow::Result<()> {
     init_tracing();
-    let port: u16 = std::env::var("SERVICE_PORT")
-        .or_else(|_| std::env::var("AUTH_PORT"))
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(4100);
+    let port: u16 = override_port.or_else(|| {
+        std::env::var("SERVICE_PORT")
+            .or_else(|_| std::env::var("AUTH_PORT"))
+            .ok()
+            .and_then(|s| s.parse().ok())
+    }).unwrap_or(4100);
     let user = DevUser { username: "jordan".into(), password: "567326".into(), display_name: "Jordan Dev".into() };
-    let secret = std::env::var("AUTH_SECRET").unwrap_or_else(|_| "dev-insecure-secret-change".repeat(2));
+    // Generate secure random secret if not set (secure by default)
+    // Uses cryptographically secure random generation via rand crate
+    let secret = std::env::var("AUTH_SECRET").unwrap_or_else(|_| {
+        use rand::Rng;
+        use rand::distributions::Alphanumeric;
+        let mut rng = rand::thread_rng();
+        let secret_bytes: String = (0..64)
+            .map(|_| rng.sample(&Alphanumeric) as char)
+            .collect();
+        tracing::warn!("AUTH_SECRET not set. Using randomly generated secret. Set AUTH_SECRET environment variable for production.");
+        secret_bytes
+    });
     let access_ttl = std::env::var("AUTH_ACCESS_TTL_MINUTES").ok().and_then(|s| s.parse().ok()).unwrap_or(30);
     let refresh_ttl = std::env::var("AUTH_REFRESH_TTL_MINUTES").ok().and_then(|s| s.parse().ok()).unwrap_or(60*24);
     let issuer = std::env::var("AUTH_ISSUER").unwrap_or_else(|_| "fks_auth".into());
     let audience = std::env::var("AUTH_AUDIENCE").unwrap_or_else(|_| "fks_web".into());
     let jwt = JwtKeys { enc: EncodingKey::from_secret(secret.as_bytes()), dec: DecodingKey::from_secret(secret.as_bytes()), algorithm: Algorithm::HS256, access_ttl, refresh_ttl, issuer, audience };
-    let state = AppState { dev_user: Arc::new(user), jwt: Arc::new(jwt), started_at: Utc::now().timestamp(), revoked: Arc::new(RwLock::new(Vec::new())) };
+    
+    // Initialize WebAuthn/Passkey support
+    let (webauthn, passkey_store, registration_state, auth_state) = {
+        let origin = std::env::var("WEBAUTHN_ORIGIN").unwrap_or_else(|_| "http://localhost:8009".to_string());
+        let rp_id = std::env::var("WEBAUTHN_RP_ID").unwrap_or_else(|_| "localhost".to_string());
+        let rp_name = std::env::var("WEBAUTHN_RP_NAME").unwrap_or_else(|_| "FKS Trading Platform".to_string());
+        
+        match passkey::init_webauthn(&origin, &rp_id, &rp_name) {
+            Ok(wa) => {
+                info!("WebAuthn/Passkey support enabled (origin: {}, rp_id: {})", origin, rp_id);
+                (
+                    Some(Arc::new(wa)),
+                    Some(passkey::PasskeyStore::default()),
+                    Some(passkey::RegistrationState::default()),
+                    Some(passkey::AuthenticationState::default()),
+                )
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize WebAuthn: {}. Passkey support disabled.", e);
+                (None, None, None, None)
+            }
+        }
+    };
+    
+    let state = AppState { 
+        dev_user: Arc::new(user), 
+        jwt: Arc::new(jwt), 
+        started_at: Utc::now().timestamp(), 
+        revoked: Arc::new(RwLock::new(Vec::new())),
+        webauthn,
+        passkey_store,
+        registration_state,
+        auth_state,
+    };
+    
     let cors = CorsLayer::new().allow_methods(Any).allow_headers(Any).allow_origin(Any);
-    let app = Router::new()
+    
+    // Set up Prometheus metrics
+    let (prometheus_layer, metric_handle) = {
+        use axum_prometheus::PrometheusMetricLayer;
+        use prometheus::{Gauge, IntGaugeVec, Registry, Encoder, TextEncoder};
+        use std::env;
+        
+        let (layer, axum_handle) = PrometheusMetricLayer::pair();
+        let registry = Registry::new();
+        
+        // Build info
+        let commit = env::var("GIT_COMMIT")
+            .or_else(|_| env::var("COMMIT_SHA"))
+            .unwrap_or_else(|_| "unknown".to_string());
+        let build_date = env::var("BUILD_DATE")
+            .or_else(|_| env::var("BUILD_TIMESTAMP"))
+            .unwrap_or_else(|_| "unknown".to_string());
+        
+        let build_info = Gauge::with_opts(
+            prometheus::opts!(
+                "fks_build_info",
+                "Build information for FKS service"
+            )
+            .const_label("service", "fks_auth")
+            .const_label("version", env!("CARGO_PKG_VERSION"))
+            .const_label("commit", &commit[..commit.len().min(8)])
+            .const_label("build_date", &build_date),
+        ).expect("Failed to create build_info metric");
+        build_info.set(1.0);
+        registry.register(Box::new(build_info)).expect("Failed to register build_info");
+        
+        // Service health
+        let service_health = IntGaugeVec::new(
+            prometheus::opts!("fks_service_health", "Service health status (1=healthy, 0=unhealthy)"),
+            &["service"],
+        ).expect("Failed to create service_health metric");
+        service_health.with_label_values(&["fks_auth"]).set(1);
+        registry.register(Box::new(service_health)).expect("Failed to register service_health");
+        
+        // Create combined handle
+        struct MetricHandle {
+            registry: Registry,
+            axum_handle: axum_prometheus::MetricHandle,
+        }
+        impl MetricHandle {
+            fn render(&self) -> String {
+                let mut output = self.axum_handle.render();
+                let encoder = TextEncoder::new();
+                let metric_families = self.registry.gather();
+                let mut buffer = Vec::new();
+                if encoder.encode(&metric_families, &mut buffer).is_ok() {
+                    if let Ok(metrics_text) = String::from_utf8(buffer) {
+                        output.push_str(&metrics_text);
+                    }
+                }
+                output
+            }
+        }
+        let handle = MetricHandle { registry, axum_handle };
+        (layer, handle)
+    };
+    
+    // Build router with optional passkey routes
+    let mut app = Router::new()
         .route("/health", get(health))
-    .route("/login", get(login_redirect).post(login))
+        .route("/login", get(login_redirect).post(login))
         .route("/refresh", post(refresh))
-    .route("/me", get(me))
-    .route("/logout", post(logout))
-    .route("/introspect", post(introspect))
-    .route("/config", get(config))
+        .route("/me", get(me))
+        .route("/logout", post(logout))
+        .route("/introspect", post(introspect))
+        .route("/config", get(config))
         .route("/verify", get(verify))
+        .route("/metrics", get(|| async move { metric_handle.render() }));
+    
+    // Add passkey routes if WebAuthn is enabled
+    if state.webauthn.is_some() {
+        app = app
+            .route("/passkey/register/start", post(passkey_start_registration))
+            .route("/passkey/register/complete", post(passkey_complete_registration))
+            .route("/passkey/authenticate/start", post(passkey_start_authentication))
+            .route("/passkey/authenticate/complete", post(passkey_complete_authentication));
+    }
+    
+    let app = app
+        .layer(prometheus_layer)
         .with_state(state)
         .layer(cors);
     let addr = SocketAddr::from(([0,0,0,0], port));
@@ -66,7 +206,8 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "started_at": state.started_at,
         "access_ttl_min": state.jwt.access_ttl,
-        "refresh_ttl_min": state.jwt.refresh_ttl
+        "refresh_ttl_min": state.jwt.refresh_ttl,
+        "passkey_enabled": state.webauthn.is_some()
     }))
 }
 
@@ -154,7 +295,9 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Me
 async fn verify(State(state): State<AppState>, headers: HeaderMap) -> StatusCode {
     let auth = match headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) { Some(v) => v, None => return StatusCode::UNAUTHORIZED };
     let token = match auth.strip_prefix("Bearer ") { Some(t) => t, None => return StatusCode::UNAUTHORIZED };
-    let Ok(data) = decode::<Claims>(token, &state.jwt.dec, &Validation::new(state.jwt.algorithm)) else { return StatusCode::UNAUTHORIZED };
+    let mut validation = Validation::new(state.jwt.algorithm);
+    validation.validate_aud = false; // manual audience check below
+    let Ok(data) = decode::<Claims>(token, &state.jwt.dec, &validation) else { return StatusCode::UNAUTHORIZED };
     if data.claims.typ != "access" { return StatusCode::UNAUTHORIZED; }
     if data.claims.iss != state.jwt.issuer || data.claims.aud != state.jwt.audience { return StatusCode::UNAUTHORIZED; }
     if is_revoked(&state, &data.claims.jti) { return StatusCode::UNAUTHORIZED; }
@@ -214,6 +357,76 @@ async fn config(State(state): State<AppState>) -> Json<serde_json::Value> {
         "issuer": state.jwt.issuer,
         "audience": state.jwt.audience,
         "access_ttl_min": state.jwt.access_ttl,
-        "refresh_ttl_min": state.jwt.refresh_ttl
+        "refresh_ttl_min": state.jwt.refresh_ttl,
+        "passkey_enabled": state.webauthn.is_some()
     }))
+}
+
+// ============================================================
+// Passkey (WebAuthn) Route Handlers
+// ============================================================
+
+async fn passkey_start_registration(
+    State(state): State<AppState>,
+    Json(req): Json<passkey::StartRegistrationRequest>,
+) -> Result<Json<passkey::StartRegistrationResponse>, (StatusCode, String)> {
+    let webauthn = state.webauthn.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "Passkey support not enabled".to_string()))?;
+    let passkey_store = state.passkey_store.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "Passkey store not initialized".to_string()))?;
+    let registration_state = state.registration_state.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "Registration state not initialized".to_string()))?;
+    
+    passkey::start_registration(
+        webauthn.clone(),
+        passkey_store.clone(),
+        registration_state.clone(),
+        Json(req),
+    ).await
+}
+
+async fn passkey_complete_registration(
+    State(state): State<AppState>,
+    Json(req): Json<passkey::CompleteRegistrationRequest>,
+) -> Result<Json<passkey::CompleteRegistrationResponse>, (StatusCode, String)> {
+    let webauthn = state.webauthn.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "Passkey support not enabled".to_string()))?;
+    let passkey_store = state.passkey_store.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "Passkey store not initialized".to_string()))?;
+    let registration_state = state.registration_state.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "Registration state not initialized".to_string()))?;
+    
+    passkey::complete_registration(
+        webauthn.clone(),
+        passkey_store.clone(),
+        registration_state.clone(),
+        Json(req),
+    ).await
+}
+
+async fn passkey_start_authentication(
+    State(state): State<AppState>,
+    Json(req): Json<passkey::StartAuthenticationRequest>,
+) -> Result<Json<passkey::StartAuthenticationResponse>, (StatusCode, String)> {
+    let webauthn = state.webauthn.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "Passkey support not enabled".to_string()))?;
+    let passkey_store = state.passkey_store.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "Passkey store not initialized".to_string()))?;
+    let auth_state = state.auth_state.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "Auth state not initialized".to_string()))?;
+    
+    passkey::start_authentication(
+        webauthn.clone(),
+        passkey_store.clone(),
+        auth_state.clone(),
+        Json(req),
+    ).await
+}
+
+async fn passkey_complete_authentication(
+    State(state): State<AppState>,
+    Json(req): Json<passkey::CompleteAuthenticationRequest>,
+) -> Result<Json<passkey::CompleteAuthenticationResponse>, (StatusCode, String)> {
+    let webauthn = state.webauthn.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "Passkey support not enabled".to_string()))?;
+    let passkey_store = state.passkey_store.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "Passkey store not initialized".to_string()))?;
+    let auth_state = state.auth_state.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "Auth state not initialized".to_string()))?;
+    
+    passkey::complete_authentication(
+        webauthn.clone(),
+        passkey_store.clone(),
+        auth_state.clone(),
+        state.jwt.clone(),
+        Json(req),
+    ).await
 }
