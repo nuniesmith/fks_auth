@@ -105,68 +105,23 @@ async fn run_internal(override_port: Option<u16>) -> anyhow::Result<()> {
     
     let cors = CorsLayer::new().allow_methods(Any).allow_headers(Any).allow_origin(Any);
     
-    // Set up Prometheus metrics
-    let (prometheus_layer, metric_handle) = {
-        use axum_prometheus::PrometheusMetricLayer;
-        use prometheus::{Gauge, IntGaugeVec, Registry, Encoder, TextEncoder};
-        use std::env;
-        
-        let (layer, axum_handle) = PrometheusMetricLayer::pair();
-        let registry = Registry::new();
-        
-        // Build info
-        let commit = env::var("GIT_COMMIT")
-            .or_else(|_| env::var("COMMIT_SHA"))
-            .unwrap_or_else(|_| "unknown".to_string());
-        let build_date = env::var("BUILD_DATE")
-            .or_else(|_| env::var("BUILD_TIMESTAMP"))
-            .unwrap_or_else(|_| "unknown".to_string());
-        
-        let build_info = Gauge::with_opts(
-            prometheus::opts!(
-                "fks_build_info",
-                "Build information for FKS service"
-            )
-            .const_label("service", "fks_auth")
-            .const_label("version", env!("CARGO_PKG_VERSION"))
-            .const_label("commit", &commit[..commit.len().min(8)])
-            .const_label("build_date", &build_date),
-        ).expect("Failed to create build_info metric");
-        build_info.set(1.0);
-        registry.register(Box::new(build_info)).expect("Failed to register build_info");
-        
-        // Service health
-        let service_health = IntGaugeVec::new(
-            prometheus::opts!("fks_service_health", "Service health status (1=healthy, 0=unhealthy)"),
-            &["service"],
-        ).expect("Failed to create service_health metric");
-        service_health.with_label_values(&["fks_auth"]).set(1);
-        registry.register(Box::new(service_health)).expect("Failed to register service_health");
-        
-        // Create combined handle
-        struct MetricHandle {
-            registry: Registry,
-            axum_handle: axum_prometheus::MetricHandle,
-        }
-        impl MetricHandle {
-            fn render(&self) -> String {
-                let mut output = self.axum_handle.render();
-                let encoder = TextEncoder::new();
-                let metric_families = self.registry.gather();
-                let mut buffer = Vec::new();
-                if encoder.encode(&metric_families, &mut buffer).is_ok() {
-                    if let Ok(metrics_text) = String::from_utf8(buffer) {
-                        output.push_str(&metrics_text);
-                    }
-                }
-                output
-            }
-        }
-        let handle = MetricHandle { registry, axum_handle };
-        (layer, handle)
+    // Set up simple Prometheus metrics
+    let metrics_output = {
+        let version = env!("CARGO_PKG_VERSION");
+        format!(
+            r#"# HELP fks_build_info Build information for the service
+# TYPE fks_build_info gauge
+fks_build_info{{service="fks_auth",version="{}"}} 1
+# HELP fks_service_health Service health status
+# TYPE fks_service_health gauge
+fks_service_health{{service="fks_auth"}} 1
+"#,
+            version
+        )
     };
     
     // Build router with optional passkey routes
+    let metrics_str = metrics_output.clone();
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/login", get(login_redirect).post(login))
@@ -176,7 +131,16 @@ async fn run_internal(override_port: Option<u16>) -> anyhow::Result<()> {
         .route("/introspect", post(introspect))
         .route("/config", get(config))
         .route("/verify", get(verify))
-        .route("/metrics", get(|| async move { metric_handle.render() }));
+        .route("/metrics", get(move || {
+            let output = metrics_str.clone();
+            async move {
+                (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+                    output
+                )
+            }
+        }));
     
     // Add passkey routes if WebAuthn is enabled
     if state.webauthn.is_some() {
@@ -188,7 +152,6 @@ async fn run_internal(override_port: Option<u16>) -> anyhow::Result<()> {
     }
     
     let app = app
-        .layer(prometheus_layer)
         .with_state(state)
         .layer(cors);
     let addr = SocketAddr::from(([0,0,0,0], port));

@@ -23,10 +23,6 @@ base64 = "0.22"
 url = "2.5"
 openssl = { version = "0.10", features=["vendored"] }
 
-# Prometheus metrics
-axum-prometheus = "0.5.1"
-prometheus = "0.13.3"
-
 [features]
 default = ["server"]
 server = []
